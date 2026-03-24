@@ -1,0 +1,9 @@
+go 1.25.1
+
+use (
+	./services/agent
+	./services/analyzer
+	./services/ingestion
+	./services/notifier
+	./shared
+)
