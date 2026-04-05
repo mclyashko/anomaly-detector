@@ -3,7 +3,9 @@ go 1.25.1
 use (
 	./services/agent
 	./services/analyzer
+	./services/fake-service
 	./services/ingestion
 	./services/notifier
 	./shared
+	./tests/integration
 )

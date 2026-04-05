@@ -1,0 +1,12 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: anomaly
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d anomaly"]
+      interval: 2s
+      timeout: 3s
+      retries: 10

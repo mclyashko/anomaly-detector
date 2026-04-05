@@ -7,10 +7,107 @@ services:
       POSTGRES_DB: anomaly
     ports: ["5432:5432"]
     volumes: ["tsdb_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d anomaly"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:29092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_ALLOW_AUTO_CREATE_TOPICS: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  fake-service:
+    build:
+      context: ../
+      dockerfile: services/fake-service/Dockerfile
+    env_file: env/fake-service.env
+    ports: ["8090:8090"]
+    restart: unless-stopped
+
+  ingestion:
+    build:
+      context: ../
+      dockerfile: services/ingestion/Dockerfile
+    env_file: env/ingestion.env
+    environment:
+      ENABLE_BROKER: "true"
+      BROKER_BROKERS: "kafka:9092"
+      BROKER_TOPIC: metrics
+      BROKER_GROUP_ID: ingestion-group
+    ports: ["8080:8080"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  analyzer:
+    build:
+      context: ../
+      dockerfile: services/analyzer/Dockerfile
+    env_file: env/analyzer.env
+    ports: ["8081:8081"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  notifier:
+    build:
+      context: ../
+      dockerfile: services/notifier/Dockerfile
+    env_file: env/notifier.env
+    ports: ["8082:8082"]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ../
+      dockerfile: services/agent/Dockerfile
+    env_file: env/agent.env
+    depends_on:
+      - fake-service
+      - ingestion
+      - analyzer
+    restart: unless-stopped
 
 volumes:
   tsdb_data:
