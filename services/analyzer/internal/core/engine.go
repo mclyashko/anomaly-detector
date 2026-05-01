@@ -16,52 +16,108 @@ const (
 // RuleEngine evaluates metrics against registered rules.
 // It is safe for concurrent use.
 type RuleEngine struct {
-	rules  []Rule
-	logger *slog.Logger
+	rules    []Rule
+	logger   *slog.Logger
+	registry *ModelRegistry // optional; used to update ML model history after evaluation
 
-	// index maps metric name → rule indices that apply to that metric.
-	// Built once at construction; provides O(1) rule lookup per metric
-	// instead of O(n) linear scan through all rules.
+	// index maps metric name → rule indices for threshold and lua rules.
 	index map[string][]int
+
+	// mlIndex maps "agentID:metricName" → rule indices for ML rules.
+	// ML rules are indexed separately because they require agentID scoping.
+	mlIndex map[string][]int
 }
 
 // NewRuleEngine creates an engine with the given rules and builds the metric index.
-func NewRuleEngine(rules []Rule, logger *slog.Logger) *RuleEngine {
-	e := &RuleEngine{rules: rules, logger: logger}
+// ML rules are indexed by "agentID:metricName" for proper scoping.
+// The optional registry is used to update ML model history after each evaluation.
+func NewRuleEngine(rules []Rule, logger *slog.Logger, registry *ModelRegistry) *RuleEngine {
+	e := &RuleEngine{rules: rules, logger: logger, registry: registry}
 
-	// Build metric-name → rule-indices index.
-	// This is the key optimization: for each metric we only evaluate rules
-	// that target its name, not all rules.
 	e.index = make(map[string][]int)
+	e.mlIndex = make(map[string][]int)
 	for i, rule := range rules {
-		m := rule.Metric()
-		e.index[m] = append(e.index[m], i)
+		cfg := extractRuleConfig(rule)
+		if cfg == nil {
+			// Fallback: index by metric name for unknown rule types.
+			e.index[rule.Metric()] = append(e.index[rule.Metric()], i)
+			continue
+		}
+		switch cfg.Type {
+		case RuleTypeML:
+			// ML rules are indexed by agentID:metricName.
+			key := cfg.AgentID + ":" + cfg.Metric
+			e.mlIndex[key] = append(e.mlIndex[key], i)
+		default:
+			// Threshold and Lua rules indexed by metric name.
+			e.index[rule.Metric()] = append(e.index[rule.Metric()], i)
+		}
 	}
 
 	return e
 }
 
-// Evaluate evaluates all rules that match the given metric's name.
-// It is lock-free and allocation-free in the fast path (no-mismatch case).
-// Returns all anomalies that fired.
-func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
-	// O(1) map lookup: only check rules that apply to this metric name.
-	indices, ok := e.index[m.Name]
-	if !ok {
+// extractRuleConfig extracts RuleConfig from a rule if it is a known rule type.
+func extractRuleConfig(rule Rule) *RuleConfig {
+	switch r := rule.(type) {
+	case *ThresholdRule:
+		return &r.cfg
+	case *LuaRule:
+		return &r.cfg
+	case *MLRule:
+		return &r.cfg
+	default:
 		return nil
 	}
+}
 
+// Evaluate evaluates all rules that match the given metric.
+// Threshold and Lua rules are matched by metric name.
+// ML rules are matched by agentID:metricName.
+func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
 	var anomalies []*Anomaly
-	for _, idx := range indices {
-		a := e.rules[idx].Evaluate(m)
-		if a == nil {
+
+	// Threshold/Lua rules: O(1) lookup by metric name.
+	if indices, ok := e.index[m.Name]; ok {
+		for _, idx := range indices {
+			a := e.rules[idx].Evaluate(m)
+			if a == nil {
+				continue
+			}
+			a.AgentID = m.AgentID
+			anomalies = append(anomalies, a)
+		}
+	}
+
+	// ML rules: lookup by agentID:metricName.
+	mlKey := m.AgentID + ":" + m.Name
+	if indices, ok := e.mlIndex[mlKey]; ok {
+		for _, idx := range indices {
+			a := e.rules[idx].Evaluate(m)
+			if a == nil {
+				continue
+			}
+			a.AgentID = m.AgentID
+			anomalies = append(anomalies, a)
+		}
+	}
+
+	return anomalies
+}
+
+// UpdateHistory updates the ML model sliding windows with the latest metric values.
+// This is called after EvaluateBatch to ensure history is fresh for the next poll cycle.
+func (e *RuleEngine) UpdateHistory(metrics []Metric) {
+	if e.registry == nil {
+		return
+	}
+	for _, m := range metrics {
+		model, ok := e.registry.Get(m.AgentID, m.Name)
+		if !ok {
 			continue
 		}
-		// Set the AgentID from the metric.
-		a.AgentID = m.AgentID
-		anomalies = append(anomalies, a)
+		model.AddHistory(m.AgentID, m.Name, m.Value)
 	}
-	return anomalies
 }
 
 // EvaluateBatch evaluates all rules against all metrics in the batch.

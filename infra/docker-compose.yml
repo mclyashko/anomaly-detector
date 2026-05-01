@@ -75,6 +75,8 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
+      models-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/healthz"]
       interval: 10s
@@ -109,5 +111,51 @@ services:
       - analyzer
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes: ["minio_data:/data", "../infra/models:/models:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  models-init:
+    build:
+      context: ..
+      dockerfile: infra/models-init.Dockerfile
+    volumes: ["../scripts/models-init.sh:/models-init.sh:ro"]
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: models
+    command: ["sh", "/models-init.sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  training:
+    build:
+      context: ..
+      dockerfile: services/training/Dockerfile
+    env_file: env/training.env
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      models-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    profiles: ["ml"]
+    restart: unless-stopped
+
 volumes:
   tsdb_data:
+  minio_data:

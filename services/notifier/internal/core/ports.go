@@ -32,6 +32,20 @@ type IncidentRepository interface {
 
 	// GetComments retrieves all comments for an incident.
 	GetComments(ctx context.Context, incidentID string) ([]IncidentComment, error)
+
+	// Delete removes an incident by ID.
+	Delete(ctx context.Context, id string) error
+
+	// BeginTx starts a transaction and executes fn within it.
+	// If fn returns an error the transaction is rolled back; otherwise it is committed.
+	// txType is an opaque transaction handle — concrete implementations use their own type.
+	BeginTx(ctx context.Context, fn func(txType interface{}) error) error
+
+	// CreateInTx inserts a new incident using the provided transaction.
+	CreateInTx(ctx context.Context, txType interface{}, incident *Incident) error
+
+	// AddEventInTx appends an event to an incident using the provided transaction.
+	AddEventInTx(ctx context.Context, txType interface{}, incidentID string, event *IncidentEvent) error
 }
 
 // NotifierChannel defines the notification delivery interface.

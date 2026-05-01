@@ -1,31 +1,34 @@
 rules:
+  - name: test_signal_ml
+    agent_id: agent-test
+    metric: test.signal
+    type: ml
+    severity: critical
+
   - name: high_cpu
+    agent_id: agent-1
     metric: http.latency_avg_ms
     type: threshold
     condition: "value > 100"
     severity: warning
 
   - name: very_high_cpu
+    agent_id: agent-1
     metric: http.latency_avg_ms
     type: threshold
     condition: "value > 500"
     severity: critical
 
   - name: high_worker_load
+    agent_id: agent-1
     metric: worker.ops_total
     type: threshold
     condition: "value > 10000"
     severity: warning
 
   - name: error_rate_high
+    agent_id: agent-1
     metric: http.error_rate
     type: threshold
     condition: "value > 0.05"
     severity: critical
-
-  # Example of a Lua rule stub — not implemented yet.
-  # - name: anomaly_pattern_lua
-  #   metric: http.latency_avg_ms
-  #   type: lua
-  #   script: rules/lua/detect_spike.lua
-  #   severity: warning

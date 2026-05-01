@@ -5,9 +5,11 @@ COPY shared/ /app/shared/
 RUN go mod download
 COPY services/analyzer/ ./
 COPY services/analyzer/rules.yaml ./
+COPY services/analyzer/models.yaml ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /bin/analyzer ./cmd/
 
 FROM scratch
 COPY --from=builder /bin/analyzer /analyzer
 COPY --from=builder /app/services/analyzer/rules.yaml /rules.yaml
+COPY --from=builder /app/services/analyzer/models.yaml /models.yaml
 ENTRYPOINT ["/analyzer"]

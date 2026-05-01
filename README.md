@@ -47,7 +47,10 @@ Microservice система для сбора time-series метрик, обна
 │  │  RuleEngine: O(1) lookup по имени метрики                        │         │
 │  │  Threshold rules: value > 0.8                                     │         │
 │  │  Lua rules: custom logic в sandbox                                 │         │
-│  │  ML rules: (stub)                                                 │         │
+│  │  ML rules: AR(1) inference + CI-based anomaly detection            │         │
+│  │    • Pure Go, no CGO                                             │         │
+│  │    • Models loaded from MinIO on startup                          │         │
+│  │    • Periodic refresh via cron                                    │         │
 │  └────────────────────────────────────┬─────────────────────────────┘         │
 │                                       │ Anomalies                         │
 │                                       ▼                                    │
@@ -73,7 +76,26 @@ Microservice система для сбора time-series метрик, обна
 │  │  Channels: LogChannel (slog)                                     │         │
 │  └──────────────────────────────────────────────────────────────────┘         │
 └────────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                        TRAINING SERVICE                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐         │
+│  │  TimescaleDB: fetch historical metrics                            │         │
+│  │  Train SARIMA model                                               │         │
+│  │  Export to ONNX + metadata.json                                   │         │
+│  │  Upload to MinIO: models/{agent}__{metric}__{type}__{version}/  │         │
+│  └──────────────────────────────────────────────────────────────────┘         │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### ML-based Anomaly Detection (Pure Go)
+
+Analyzer загружает ONNX-модели из MinIO и выполняет инференс **без CGO** — только Go + стандартная библиотека:
+
+- **ONNX-модель** хранит SARIMA-параметры (AR, MA, residual_std, seasonality)
+- **Go-парсинг**: параметры извлекаются из `metadata.json` (загружается из MinIO)
+- **Inferencing**: AR(1) прогноз вычисляется на Go, CI строятся через `normQuantile`
+- **Reloader**: периодический cron обновляет модели из MinIO
 
 ### PUSH vs PULL
 
@@ -104,11 +126,13 @@ Microservice система для сбора time-series метрик, обна
 | `fake-service` | :8090 | Тестовый генератор метрик (CPU-bound воркеры) |
 | `agent` | — | Собирает метрики, отправляет в Ingestion |
 | `ingestion` | :8080 | HTTP API + Kafka consumer → TimescaleDB |
-| `analyzer` | :8081 | Polling TimescaleDB, rule evaluation |
+| `analyzer` | :8081 | Polling TimescaleDB, rule evaluation, ML inference |
 | `notifier` | :8082 | Incident lifecycle + Web UI |
+| `training` | — | Тренировка SARIMA → ONNX → MinIO |
 | `TimescaleDB` | :5432 | Хранение метрик |
 | `PostgreSQL` (notifier) | :5433 | Хранение инцидентов |
 | `Kafka` | :9092 | Message queue |
+| `MinIO` | :9000 | Хранение ONNX-моделей |
 
 ---
 
@@ -160,6 +184,13 @@ cd services/{service} && go run ./cmd/
 | `POLL_INTERVAL` | `5s` | Интервал polling |
 | `BATCH_SIZE` | `100` | Метрик за один poll |
 | `RULES_FILE` | `rules.yaml` | Файл с правилами |
+| `MINIO_ENDPOINT` | `localhost:9000` | MinIO endpoint |
+| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
+| `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key |
+| `MINIO_BUCKET` | `models` | MinIO bucket для моделей |
+| `MINIO_USE_SSL` | `false` | Использовать SSL |
+| `MODEL_REFRESH_INTERVAL_SEC` | `300` | Интервал обновления моделей |
+| `MODELS_CONFIG_FILE` | `models.yaml` | Файл конфигурации моделей |
 
 ### notifier
 
@@ -202,7 +233,7 @@ Analyzer не имеет внешнего HTTP API. Он:
 ### Notifier
 
 | Endpoint | Метод | Описание |
-|----------|-------|----------|
+|----------|-------|---------|
 | `/api/v1/notifications` | POST | Принять аномалию от analyzer |
 | `/api/v1/incidents` | GET | Список всех инцидентов |
 | `/api/v1/incidents/:id` | GET | Детали инцидента |
@@ -223,17 +254,56 @@ rules:
     condition: "value > 100"
     severity: warning
 
-  - name: very_high_latency
+  - name: latency_anomaly
     metric: http.latency_avg_ms
-    type: threshold
-    condition: "value > 500"
+    type: ml
+    agent_id: agent-1
     severity: critical
 ```
 
 Поддерживаемые типы правил:
 - `threshold` — простое выражение (реализовано)
 - `lua` — кастомная логика в Lua sandbox (реализовано)
-- `ml` — machine learning (stub)
+- `ml` — ML-обнаружение аномалий по CI (реализовано)
+
+---
+
+## Модели (analyzer)
+
+### models.yaml
+
+```yaml
+model_refresh_interval_sec: 300
+
+mappings:
+  - agent_id: "agent-1"
+    metric: "http_latency_avg_ms"
+    model_type: "sarima"
+    version_policy: "latest"
+    anomaly_threshold: 0.95
+    window_size: 48
+```
+
+### MinIO structure
+
+```
+models/
+  agent-1__http_latency_avg_ms__sarima__v1/
+    model.onnx       # ONNX-файл (используется как контейнер параметров)
+    metadata.json    # SARIMA-параметры: ar_params, ma_params, residual_std, etc.
+  agent-1__http_latency_avg_ms__sarima__v2/
+    model.onnx
+    metadata.json
+```
+
+### ML Inference Algorithm
+
+```
+forecast = last_val + ar_params * (last_val - prev_val)
+CI_half_width = normQuantile((1 + confidence_level) / 2) * residual_std
+CI = [forecast - CI_half_width, forecast + CI_half_width]
+anomaly = value < CI_lower OR value > CI_upper
+```
 
 ---
 
@@ -260,11 +330,12 @@ rules:
 ## Тестирование
 
 ```bash
-# Unit тесты
-make test
+# Go тесты
+cd services/analyzer && go test ./...
+cd services/training && go test ./...
 
-# Интеграционные тесты (требуют Docker)
-make test-integration
+# Python тесты (training service)
+.venv/bin/python3 -m pytest services/training/tests/ -v
 
 # Линтинг
 make lint

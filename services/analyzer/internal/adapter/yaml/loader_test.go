@@ -133,7 +133,7 @@ rules:
 	tmp := tempFile(t, content)
 	defer os.Remove(tmp)
 
-	rules, err := yaml.CompileRules(tmp, nil)
+	rules, err := yaml.CompileRules(tmp, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

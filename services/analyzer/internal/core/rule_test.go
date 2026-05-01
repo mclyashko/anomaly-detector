@@ -99,7 +99,7 @@ func TestThresholdRule_WrongMetric(t *testing.T) {
 
 func TestRuleFactory_Threshold(t *testing.T) {
 	cfg := core.RuleConfig{Name: "r", Metric: "m", Type: core.RuleTypeThreshold, Condition: "value > 1"}
-	rule, err := core.RuleFactory(cfg, nil)
+	rule, err := core.RuleFactory(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRuleFactory_Threshold(t *testing.T) {
 
 func TestRuleFactory_LuaStub(t *testing.T) {
 	cfg := core.RuleConfig{Name: "lua-rule", Metric: "m", Type: core.RuleTypeLua, Script: "./rules/test.lua", Severity: core.SeverityInfo}
-	_, err := core.RuleFactory(cfg, nil)
+	_, err := core.RuleFactory(cfg, nil, nil)
 	if err == nil {
 		// LuaRule requires Script field to be non-empty.
 		// If Script is empty, NewLuaRule returns error.
@@ -119,19 +119,66 @@ func TestRuleFactory_LuaStub(t *testing.T) {
 
 func TestRuleFactory_MLStub(t *testing.T) {
 	cfg := core.RuleConfig{Name: "ml-rule", Metric: "m", Type: core.RuleTypeML, Condition: "", Severity: core.SeverityInfo}
-	rule, err := core.RuleFactory(cfg, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if rule.Name() != "ml-rule" {
-		t.Errorf("name = %q, want ml-rule", rule.Name())
+	_, err := core.RuleFactory(cfg, nil, nil)
+	if err == nil {
+		t.Error("expected error for ML rule without registry")
 	}
 }
 
 func TestRuleFactory_UnknownType(t *testing.T) {
 	cfg := core.RuleConfig{Name: "bad", Metric: "m", Type: "unknown"}
-	_, err := core.RuleFactory(cfg, nil)
+	_, err := core.RuleFactory(cfg, nil, nil)
 	if err == nil {
 		t.Error("expected error for unknown type")
+	}
+}
+
+// --- MLRule ---
+
+func TestMLRule_NoModel(t *testing.T) {
+	// Registry has no models loaded — MLRule should return nil silently.
+	cfg := core.RuleConfig{
+		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
+		AgentID: "agent-1", Severity: core.SeverityWarning,
+	}
+	ms := &mockStorage{}
+	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
+	mlRule := core.NewMLRule(cfg, registry)
+
+	// No model for agent-1:cpu → nil
+	anomaly := mlRule.Evaluate(metric("cpu", 100.0, "agent-1"))
+	if anomaly != nil {
+		t.Error("expected nil when no model is loaded")
+	}
+}
+
+func TestMLRule_WrongAgent(t *testing.T) {
+	cfg := core.RuleConfig{
+		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
+		AgentID: "agent-1", Severity: core.SeverityWarning,
+	}
+	ms := &mockStorage{}
+	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
+	mlRule := core.NewMLRule(cfg, registry)
+
+	// Metric for agent-2, rule scoped to agent-1 → nil
+	anomaly := mlRule.Evaluate(metric("cpu", 100.0, "agent-2"))
+	if anomaly != nil {
+		t.Error("expected nil for wrong agent_id")
+	}
+}
+
+func TestMLRule_WrongMetric(t *testing.T) {
+	cfg := core.RuleConfig{
+		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
+		AgentID: "agent-1", Severity: core.SeverityWarning,
+	}
+	ms := &mockStorage{}
+	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
+	mlRule := core.NewMLRule(cfg, registry)
+
+	anomaly := mlRule.Evaluate(metric("memory", 100.0, "agent-1"))
+	if anomaly != nil {
+		t.Error("expected nil for wrong metric")
 	}
 }

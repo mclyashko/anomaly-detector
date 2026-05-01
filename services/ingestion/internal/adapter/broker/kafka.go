@@ -34,13 +34,18 @@ func (c ConsumerConfig) defaults() ConsumerConfig {
 	return c
 }
 
+const (
+	// shutdownTimeout is the max time workers get to finish on Stop().
+	shutdownTimeout = 10 * time.Second
+)
+
 // KafkaConsumer implements port.MetricConsumer on top of a Kafka topic.
 // It fetches messages from Kafka and dispatches them to a worker pool,
 // which deserializes JSON and calls the ingestion service.
 // A bounded channel applies backpressure: if the service is slower than
 // the broker, fetching pauses automatically.
 type KafkaConsumer struct {
-	cfg     ConsumerConfig
+	cfg ConsumerConfig
 	logger  *slog.Logger
 	service *core.IngestionService
 
@@ -48,6 +53,7 @@ type KafkaConsumer struct {
 	jobs   chan rawMessage
 	wg     sync.WaitGroup
 	stopMu sync.Mutex
+	stopped bool // true after Stop() has been called
 }
 
 // kafkaFetcher abstracts the Kafka read operations needed by the consumer.
@@ -143,10 +149,35 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down workers and closes the Kafka reader.
+// It closes the jobs channel and waits up to shutdownTimeout for all workers
+// to finish. If the timeout expires, remaining workers are abandoned and the
+// Kafka reader is closed anyway.
 func (c *KafkaConsumer) Stop() {
+	c.stopMu.Lock()
+	if c.stopped {
+		c.stopMu.Unlock()
+		return
+	}
+	c.stopped = true
+	c.stopMu.Unlock()
+
 	c.logger.Info("kafka consumer stopping")
 	close(c.jobs)
-	c.wg.Wait()
+
+	// Wait for workers to drain with a timeout.
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		c.logger.Info("kafka consumer workers drained")
+	case <-time.After(shutdownTimeout):
+		c.logger.Warn("kafka consumer workers did not drain within timeout, abandoning")
+	}
+
 	if c.reader != nil {
 		c.reader.Close()
 	}
@@ -154,6 +185,7 @@ func (c *KafkaConsumer) Stop() {
 }
 
 // worker processes messages from the job channel.
+// It stops immediately when the jobs channel is closed.
 func (c *KafkaConsumer) worker() {
 	defer c.wg.Done()
 	for job := range c.jobs {
@@ -200,36 +232,44 @@ func (c *KafkaConsumer) process(job rawMessage) {
 	}
 
 	// Submit with retry.
-	var lastErr error
+	// commitNow semantics:
+	//  - validation error:   commit immediately (message is permanently invalid, don't retry)
+	//  - transient error:     retry with backoff; on success commit; on exhaust → don't commit (redelivered)
+	commitNow := false
 	for attempt := 0; attempt <= 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * 200 * time.Millisecond)
 		}
 		if err := c.service.HandleBatch(context.Background(), batch); err != nil {
-			lastErr = err
 			var ve *core.ValidationError
 			if errors.As(err, &ve) {
+				// Validation errors are permanent — commit and drop the message.
 				c.logger.Warn("invalid batch from kafka, skipping",
 					"agent_id", payload.AgentID, "err", err)
+				commitNow = true
 				break
 			}
-			c.logger.Warn("HandleBatch failed, retrying",
-				"attempt", attempt, "err", err)
-			continue
+			if attempt < 3 {
+				c.logger.Warn("HandleBatch failed, retrying",
+					"attempt", attempt, "err", err)
+				continue
+			}
+			// Exhausted retries — log error and return without committing.
+			// Message will be redelivered by Kafka when this consumer rebalances.
+			c.logger.Error("HandleBatch failed after retries, message will be redelivered",
+				"agent_id", payload.AgentID, "err", err)
+			return
 		}
-		lastErr = nil
+		// Success.
+		commitNow = true
 		break
 	}
 
-	if lastErr != nil {
-		c.logger.Error("HandleBatch failed after retries, dropping",
-			"agent_id", payload.AgentID, "err", lastErr)
-	}
-
-	// Commit offset — at-least-once guarantee.
-	if err := c.reader.CommitMessages(context.Background(), job.msg); err != nil {
-		c.logger.Warn("failed to commit kafka offset",
-			"offset", job.msg.Offset, "err", err)
+	if commitNow {
+		if err := c.reader.CommitMessages(context.Background(), job.msg); err != nil {
+			c.logger.Warn("failed to commit kafka offset",
+				"offset", job.msg.Offset, "err", err)
+		}
 	}
 }
 

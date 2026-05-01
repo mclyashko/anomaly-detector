@@ -1,0 +1,14 @@
+models:
+  - agent_id: agent-1
+    metric_name: http.latency_avg_ms
+    model_type: sarima
+    training_window_days: 30
+    seasonality_period: 24  # hourly data, 24h daily seasonality
+    confidence_level: 0.95
+
+  - agent_id: agent-1
+    metric_name: worker.ops_total
+    model_type: sarima
+    training_window_days: 14
+    seasonality_period: 1
+    confidence_level: 0.95

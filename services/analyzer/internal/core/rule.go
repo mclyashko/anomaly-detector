@@ -26,6 +26,7 @@ const (
 type RuleConfig struct {
 	Name      string   `yaml:"name"`
 	Metric    string   `yaml:"metric"`
+	AgentID   string   `yaml:"agent_id"` // Scope rule to specific agent; empty = all agents
 	Type      RuleType `yaml:"type"`
 	Condition string   `yaml:"condition"` // e.g. "value > 0.8" for threshold
 	Script    string   `yaml:"script"`    // e.g. "./rules/cpu_rule.lua" for lua
@@ -62,15 +63,22 @@ func (r *ThresholdRule) Evaluate(m Metric) *Anomaly {
 	if m.Name != r.cfg.Metric {
 		return nil
 	}
+	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
+		return nil
+	}
 	if r.check(m.Value) {
 		return &Anomaly{
+			ID:        m.ID,
 			Rule:      r.cfg.Name,
 			Metric:    m.Name,
+			MetricID:  m.ID,
 			Value:     m.Value,
 			Condition: r.cfg.Condition,
 			Severity:  r.cfg.Severity,
 			Timestamp: m.Timestamp,
 			Message:   r.cfg.Condition,
+			AgentID:   m.AgentID,
+			Service:   m.AgentID,
 		}
 	}
 	return nil
@@ -93,6 +101,9 @@ func (r *LuaRule) Name() string   { return r.cfg.Name }
 func (r *LuaRule) Metric() string { return r.cfg.Metric }
 
 func (r *LuaRule) Evaluate(m Metric) *Anomaly {
+	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
+		return nil
+	}
 	triggered, msg, err := r.executor.Execute(r.cfg.Script, m)
 	if err != nil {
 		// Error is logged by executor; skip this rule silently.
@@ -102,39 +113,89 @@ func (r *LuaRule) Evaluate(m Metric) *Anomaly {
 		return nil
 	}
 	return &Anomaly{
+		ID:        m.ID,
 		Rule:      r.cfg.Name,
 		Metric:    m.Name,
+		MetricID:  m.ID,
 		Value:     m.Value,
 		Condition: r.cfg.Script,
 		Severity:  r.cfg.Severity,
 		Timestamp: m.Timestamp,
 		Message:   msg,
+		Service:   m.AgentID,
 	}
 }
 
-// MLRule is a stub for future ML-based anomaly detection rules.
+// MLRule evaluates metrics using an ONNX ML model loaded from MinIO.
 type MLRule struct {
-	cfg  RuleConfig
-	path string // future: path to ONNX model
+	cfg      RuleConfig
+	registry *ModelRegistry
+}
+
+func NewMLRule(cfg RuleConfig, registry *ModelRegistry) *MLRule {
+	return &MLRule{cfg: cfg, registry: registry}
 }
 
 func (r *MLRule) Name() string   { return r.cfg.Name }
 func (r *MLRule) Metric() string { return r.cfg.Metric }
-func (*MLRule) Evaluate(_ Metric) *Anomaly {
-	panic("MLRule is not implemented yet")
+
+// Evaluate runs ML inference for the given metric.
+// It retrieves the recent history window from the model's sliding buffer,
+// runs the forecast, and fires an anomaly if the value falls outside the confidence interval.
+func (r *MLRule) Evaluate(m Metric) *Anomaly {
+	if r.cfg.Metric != "" && m.Name != r.cfg.Metric {
+		return nil
+	}
+	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
+		return nil
+	}
+	model, ok := r.registry.Get(m.AgentID, m.Name)
+	if !ok {
+		return nil
+	}
+
+	history := model.GetHistory(m.AgentID, m.Name)
+	windowSize := model.Config.WindowSize
+	if windowSize == 0 {
+		windowSize = DefaultWindowSize
+	}
+	if len(history) < windowSize {
+		return nil
+	}
+
+	triggered, msg := model.DetectAnomaly(m.Value, history)
+	if !triggered {
+		return nil
+	}
+	return &Anomaly{
+		ID:        m.ID,
+		Rule:      r.cfg.Name,
+		Metric:    m.Name,
+		MetricID:  m.ID,
+		Value:     m.Value,
+		Condition: "ml_anomaly",
+		Severity:  r.cfg.Severity,
+		Timestamp: m.Timestamp,
+		Message:   msg,
+		AgentID:   m.AgentID,
+		Service:   m.AgentID,
+	}
 }
 
 // RuleFactory creates a Rule from a RuleConfig.
-// The executor is required for Lua rules; threshold and ML rules ignore it.
-// Returns an error for unknown rule types.
-func RuleFactory(cfg RuleConfig, executor LuaExecutor) (Rule, error) {
+// The executor is required for Lua rules. The registry is required for ML rules.
+// Returns an error for unknown rule types or if ML rule has no registry.
+func RuleFactory(cfg RuleConfig, executor LuaExecutor, registry *ModelRegistry) (Rule, error) {
 	switch cfg.Type {
 	case RuleTypeThreshold:
 		return NewThresholdRule(cfg)
 	case RuleTypeLua:
 		return NewLuaRule(cfg, executor)
 	case RuleTypeML:
-		return &MLRule{cfg: cfg}, nil
+		if registry == nil {
+			return nil, errors.New("ML rule requires a model registry")
+		}
+		return NewMLRule(cfg, registry), nil
 	default:
 		return nil, fmt.Errorf("unknown rule type %q for rule %q", cfg.Type, cfg.Name)
 	}

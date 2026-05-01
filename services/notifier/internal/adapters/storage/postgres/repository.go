@@ -24,6 +24,22 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// BeginTx starts a new database transaction and passes it to fn.
+// If fn returns an error the transaction is rolled back; otherwise it is committed.
+func (r *Repository) BeginTx(ctx context.Context, fn func(tx interface{}) error) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			return fmt.Errorf("rollback failed: %v (original error: %w)", rbErr, err)
+		}
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // Create inserts a new incident.
 func (r *Repository) Create(ctx context.Context, incident *core.Incident) error {
 	query := `
@@ -118,6 +134,30 @@ func (r *Repository) List(ctx context.Context) ([]core.Incident, error) {
 	return incidents, nil
 }
 
+// CreateInTx inserts a new incident using the provided transaction.
+func (r *Repository) CreateInTx(ctx context.Context, txType interface{}, incident *core.Incident) error {
+	tx := txType.(pgx.Tx)
+	query := `
+		INSERT INTO incidents (id, rule, service, metric, status, severity, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	incident.ID = newUUID()
+	_, err := tx.Exec(ctx, query,
+		incident.ID,
+		incident.Rule,
+		incident.Service,
+		incident.Metric,
+		incident.Status,
+		incident.Severity,
+		incident.CreatedAt,
+		incident.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create incident: %w", err)
+	}
+	return nil
+}
+
 // AddEvent appends an event to an incident.
 func (r *Repository) AddEvent(ctx context.Context, incidentID string, event *core.IncidentEvent) error {
 	query := `
@@ -126,6 +166,27 @@ func (r *Repository) AddEvent(ctx context.Context, incidentID string, event *cor
 	`
 	event.ID = newUUID()
 	_, err := r.pool.Exec(ctx, query,
+		event.ID,
+		incidentID,
+		event.Payload,
+		event.Timestamp,
+		event.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("add event: %w", err)
+	}
+	return nil
+}
+
+// AddEventInTx appends an event to an incident using the provided transaction.
+func (r *Repository) AddEventInTx(ctx context.Context, txType interface{}, incidentID string, event *core.IncidentEvent) error {
+	tx := txType.(pgx.Tx)
+	query := `
+		INSERT INTO incident_events (id, incident_id, payload, timestamp, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`
+	event.ID = newUUID()
+	_, err := tx.Exec(ctx, query,
 		event.ID,
 		incidentID,
 		event.Payload,
@@ -205,6 +266,16 @@ func (r *Repository) GetComments(ctx context.Context, incidentID string) ([]core
 		comments = append(comments, c)
 	}
 	return comments, nil
+}
+
+// Delete removes an incident and its events/comments by ID (used for compensating actions).
+func (r *Repository) Delete(ctx context.Context, id string) error {
+	query := `DELETE FROM incidents WHERE id = $1`
+	_, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete incident: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) scanIncident(row pgx.Row) (*core.Incident, error) {

@@ -34,3 +34,22 @@ func GetInt(key string, fallback int) int {
 func GetDurationSec(key string, fallbackSec int) time.Duration {
 	return time.Duration(GetInt(key, fallbackSec)) * time.Second
 }
+
+// GetBool returns the boolean value of key (true/false/1/0), or the fallback.
+func GetBool(key string, fallback ...bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		if len(fallback) > 0 {
+			return fallback[0]
+		}
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		if len(fallback) > 0 {
+			return fallback[0]
+		}
+		return false
+	}
+	return b
+}

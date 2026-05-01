@@ -6,32 +6,32 @@ import (
 	"time"
 )
 
-// Notifier is the port for forwarding anomaly events to downstream consumers.
-type Notifier interface {
-	Notify(ctx context.Context, anomalies []*Anomaly) error
-}
-
 // MetricFetcher is the port for reading metrics from storage.
 type MetricFetcher interface {
 	FetchUnanalyzed(ctx context.Context, analyzerID string, limit int) ([]Metric, error)
-	MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs []int64) error
+	MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs []int64) (int64, error)
 }
 
-// AnalyzerService polls TimescaleDB for unanalyzed metrics, evaluates them, and forwards anomalies.
+// AnalyzerService polls TimescaleDB for unanalyzed metrics, evaluates them, and publishes anomalies.
 type AnalyzerService struct {
 	reader     MetricFetcher
 	engine     *RuleEngine
-	notifier   Notifier
+	producer   EventProducer
 	analyzerID string
 	batchSize  int
 	logger     *slog.Logger
+}
+
+// EventProducer is the port for publishing anomaly events to a broker.
+type EventProducer interface {
+	Produce(ctx context.Context, anomalies []*Anomaly) error
 }
 
 // NewAnalyzerService creates an analyzer that polls storage for metrics.
 func NewAnalyzerService(
 	reader MetricFetcher,
 	engine *RuleEngine,
-	notifier Notifier,
+	producer EventProducer,
 	analyzerID string,
 	batchSize int,
 	logger *slog.Logger,
@@ -39,7 +39,7 @@ func NewAnalyzerService(
 	return &AnalyzerService{
 		reader:     reader,
 		engine:     engine,
-		notifier:   notifier,
+		producer:   producer,
 		analyzerID: analyzerID,
 		batchSize:  batchSize,
 		logger:     logger,
@@ -59,13 +59,14 @@ func (s *AnalyzerService) Run(ctx context.Context, pollInterval time.Duration) {
 			s.logger.Info("analyzer polling stopped")
 			return
 		case <-ticker.C:
-			s.processMetrics(ctx)
+			s.ProcessMetrics(ctx)
 		}
 	}
 }
 
-// processMetrics fetches unanalyzed metrics, evaluates them, and marks as analyzed.
-func (s *AnalyzerService) processMetrics(ctx context.Context) {
+// processMetrics fetches unanalyzed metrics, evaluates them in batch, and
+// publishes anomalies to Kafka. Anomalous metrics are marked only after successful publish.
+func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 	metrics, err := s.reader.FetchUnanalyzed(ctx, s.analyzerID, s.batchSize)
 	if err != nil {
 		s.logger.Error("failed to fetch unanalyzed metrics", "err", err)
@@ -77,36 +78,66 @@ func (s *AnalyzerService) processMetrics(ctx context.Context) {
 		return
 	}
 
-	s.logger.Info("processing metrics", "count", len(metrics))
+	// Evaluate all metrics at once — engine handles parallelism internally.
+	batch := Batch{Metrics: metrics}
+	anomalies := s.engine.EvaluateBatch(batch)
 
-	// Evaluate each metric against rules.
-	var anomalyIDs []int64
-	for _, m := range metrics {
-		anomalies := s.engine.Evaluate(m)
-		if len(anomalies) > 0 {
-			s.logger.Info("anomalies detected",
-				"metric_id", m.ID,
-				"metric", m.Name,
-				"value", m.Value,
-				"anomalies", len(anomalies),
-			)
+	// Update ML model history with these metrics for the next poll cycle.
+	s.engine.UpdateHistory(metrics)
 
-			// Send anomalies to notifier.
-			if err := s.notifier.Notify(ctx, anomalies); err != nil {
-				s.logger.Error("failed to notify anomalies", "err", err, "metric_id", m.ID)
-				// Don't mark as analyzed if notification failed.
-				continue
-			}
-		}
-		anomalyIDs = append(anomalyIDs, m.ID)
+	// Build metricID → anomaly lookup directly from MetricID field.
+	anomalyMetricIDs := make(map[int64]bool, len(anomalies))
+	for _, a := range anomalies {
+		anomalyMetricIDs[a.MetricID] = true
 	}
 
-	// Mark all processed metrics as analyzed.
-	if len(anomalyIDs) > 0 {
-		if err := s.reader.MarkAnalyzed(ctx, s.analyzerID, anomalyIDs); err != nil {
-			s.logger.Error("failed to mark metrics as analyzed", "err", err, "count", len(anomalyIDs))
+	// Separate: anomaly metrics → publish, normal metrics → mark analyzed.
+	var normalIDs, notifyIDs []int64
+	for _, m := range metrics {
+		if anomalyMetricIDs[m.ID] {
+			notifyIDs = append(notifyIDs, m.ID)
 		} else {
-			s.logger.Debug("marked metrics as analyzed", "count", len(anomalyIDs))
+			normalIDs = append(normalIDs, m.ID)
+		}
+	}
+
+	// Mark normal metrics as analyzed. Stop on any error — metrics must not be lost.
+	if len(normalIDs) > 0 {
+		rows, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, normalIDs)
+		if err != nil {
+			s.logger.Error("failed to mark normal metrics as analyzed, will retry next poll",
+				"err", err, "count", len(normalIDs), "ids", normalIDs)
+			return
+		}
+		if rows != int64(len(normalIDs)) {
+			s.logger.Error("mark analyzed: row count mismatch, metrics may be lost",
+				"expected", len(normalIDs), "affected", rows, "ids", normalIDs)
+			return
+		}
+	}
+
+	// Publish anomalies to Kafka. If publish fails, metrics will be re-fetched on next poll.
+	if len(notifyIDs) > 0 {
+		if err := s.producer.Produce(ctx, anomalies); err != nil {
+			s.logger.Error("failed to publish anomalies to Kafka, will retry next poll",
+				"err", err, "count", len(notifyIDs), "ids", notifyIDs)
+			return
+		}
+		s.logger.Info("anomalies published to Kafka",
+			"anomaly_count", len(anomalies),
+			"metric_count", len(notifyIDs))
+
+		// Only mark anomalous metrics as analyzed after successful publish.
+		rows, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, notifyIDs)
+		if err != nil {
+			s.logger.Error("anomalies published but failed to mark anomalous metrics, will retry",
+				"err", err, "count", len(notifyIDs), "ids", notifyIDs)
+			return
+		}
+		if rows != int64(len(notifyIDs)) {
+			s.logger.Error("mark analyzed: row count mismatch for anomalous metrics",
+				"expected", len(notifyIDs), "affected", rows, "ids", notifyIDs)
+			return
 		}
 	}
 }

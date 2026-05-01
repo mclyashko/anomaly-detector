@@ -48,8 +48,8 @@ func (l *Loader) Load() ([]core.RuleConfig, error) {
 }
 
 // CompileRules loads configs from the YAML file and creates Rule instances
-// using the core.RuleFactory. Returns the slice of compiled rules.
-func CompileRules(path string, executor core.LuaExecutor) ([]core.Rule, error) {
+// using the core.RuleFactory. The registry is required for ML rules.
+func CompileRules(path string, executor core.LuaExecutor, registry *core.ModelRegistry) ([]core.Rule, error) {
 	loader := NewLoader(path)
 	configs, err := loader.Load()
 	if err != nil {
@@ -58,13 +58,31 @@ func CompileRules(path string, executor core.LuaExecutor) ([]core.Rule, error) {
 
 	rules := make([]core.Rule, 0, len(configs))
 	for _, cfg := range configs {
-		rule, err := core.RuleFactory(cfg, executor)
+		rule, err := core.RuleFactory(cfg, executor, registry)
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", cfg.Name, err)
 		}
 		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+// LoadModelsConfig reads the model registry configuration from models.yaml.
+func LoadModelsConfig(path string) ([]core.ModelConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // models.yaml is optional
+		}
+		return nil, fmt.Errorf("read models config %q: %w", path, err)
+	}
+	var doc struct {
+		Mappings []core.ModelConfig `yaml:"mappings"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse models.yaml: %w", err)
+	}
+	return doc.Mappings, nil
 }
 
 // Verify Loader satisfies port.RuleLoader.

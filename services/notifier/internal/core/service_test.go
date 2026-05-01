@@ -97,6 +97,32 @@ func (m *mockRepository) GetComments(ctx context.Context, incidentID string) ([]
 	return m.comments[incidentID], nil
 }
 
+// txMock is a minimal transaction mock that implements pgx.Tx for testing.
+type txMock struct{}
+
+func (txMock) Commit(ctx context.Context) error   { return nil }
+func (txMock) Rollback(ctx context.Context) error { return nil }
+func (txMock) Exec(ctx context.Context, sql string, arguments ...any) (interface{ RowsAffected() int64 }, error) {
+	return nil, nil
+}
+
+func (m *mockRepository) Delete(ctx context.Context, id string) error {
+	delete(m.incidents, id)
+	return nil
+}
+
+func (m *mockRepository) BeginTx(ctx context.Context, fn func(tx interface{}) error) error {
+	return fn(txMock{})
+}
+
+func (m *mockRepository) CreateInTx(ctx context.Context, tx interface{}, incident *Incident) error {
+	return m.Create(ctx, incident)
+}
+
+func (m *mockRepository) AddEventInTx(ctx context.Context, tx interface{}, incidentID string, event *IncidentEvent) error {
+	return m.AddEvent(ctx, incidentID, event)
+}
+
 // mockChannel implements NotifierChannel for testing.
 type mockChannel struct {
 	created   int

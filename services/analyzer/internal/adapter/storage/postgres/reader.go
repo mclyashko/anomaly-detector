@@ -75,10 +75,10 @@ func (r *Reader) FetchUnanalyzed(ctx context.Context, analyzerID string, limit i
 	return metrics, nil
 }
 
-// MarkAnalyzed marks the given metrics as analyzed.
-func (r *Reader) MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs []int64) error {
+// MarkAnalyzed marks the given metrics as analyzed and returns the number of rows affected.
+func (r *Reader) MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs []int64) (int64, error) {
 	if len(metricIDs) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	query := `
@@ -87,12 +87,12 @@ func (r *Reader) MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs 
 		WHERE id = ANY($3)
 	`
 
-	_, err := r.pool.Exec(ctx, query, time.Now().UTC(), analyzerID, metricIDs)
+	tag, err := r.pool.Exec(ctx, query, time.Now().UTC(), analyzerID, metricIDs)
 	if err != nil {
-		return fmt.Errorf("mark analyzed: %w", err)
+		return 0, fmt.Errorf("mark analyzed: %w", err)
 	}
 
-	return nil
+	return tag.RowsAffected(), nil
 }
 
 // Close closes the connection pool.

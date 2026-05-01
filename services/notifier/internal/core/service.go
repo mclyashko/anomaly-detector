@@ -38,57 +38,79 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 		return nil, err
 	}
 
-	var incident *Incident
 	if existing != nil {
 		// Update existing incident.
-		incident = existing
-		incident.Status = StatusUpdated
-		incident.UpdatedAt = time.Now().UTC()
-
-		if err := s.repo.Update(ctx, incident); err != nil {
+		existing.Status = StatusUpdated
+		existing.UpdatedAt = time.Now().UTC()
+		if err := s.repo.Update(ctx, existing); err != nil {
 			return nil, err
 		}
 		s.logger.Info("incident updated",
-			"incident_id", incident.ID,
-			"rule", incident.Rule,
-			"service", incident.Service,
+			"incident_id", existing.ID,
+			"rule", existing.Rule,
+			"service", existing.Service,
 		)
-	} else {
-		// Create new incident.
-		incident = &Incident{
-			Rule:      payload.Rule,
-			Service:   payload.Service,
-			Metric:    payload.Metric,
-			Status:    StatusOpen,
-			Severity:  payload.Severity,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
+
+		// Append the event (outside transaction — incident already exists).
+		event := &IncidentEvent{
+			IncidentID: existing.ID,
+			Payload:    mustMarshal(payload),
+			Timestamp:  timeFromUnix(payload.Timestamp),
+			CreatedAt:  time.Now().UTC(),
 		}
-		if err := s.repo.Create(ctx, incident); err != nil {
+		if err := s.repo.AddEvent(ctx, existing.ID, event); err != nil {
 			return nil, err
 		}
-		s.logger.Info("incident created",
-			"incident_id", incident.ID,
-			"rule", incident.Rule,
-			"service", incident.Service,
-		)
-
-		// Notify on creation.
-		s.channel.NotifyIncidentCreated(ctx, incident, payload)
+		return existing, nil
 	}
 
-	// Append the anomaly event.
+	// Create new incident atomically with the initial event.
+	incident := &Incident{
+		Rule:      payload.Rule,
+		Service:   payload.Service,
+		Metric:    payload.Metric,
+		Status:    StatusOpen,
+		Severity:  payload.Severity,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
 	event := &IncidentEvent{
-		IncidentID: incident.ID,
+		IncidentID: "", // filled after CreateInTx generates the ID
 		Payload:    mustMarshal(payload),
 		Timestamp:  timeFromUnix(payload.Timestamp),
 		CreatedAt:  time.Now().UTC(),
 	}
-	if err := s.repo.AddEvent(ctx, incident.ID, event); err != nil {
+
+	// Use a transaction so incident+event are atomic — no compensating delete needed.
+	err = s.repo.BeginTx(ctx, func(tx interface{}) error {
+		if err := s.repo.CreateInTx(ctx, tx, incident); err != nil {
+			return err
+		}
+		event.IncidentID = incident.ID
+		if err := s.repo.AddEventInTx(ctx, tx, incident.ID, event); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
+	s.logger.Info("incident created",
+		"incident_id", incident.ID,
+		"rule", incident.Rule,
+		"service", incident.Service,
+	)
+
+	// Notify after both inserts succeed.
+	s.channel.NotifyIncidentCreated(ctx, incident, payload)
+
 	return incident, nil
+}
+
+// Delete removes an incident by ID (used for compensating actions).
+func (s *NotifierService) Delete(ctx context.Context, id string) error {
+	return s.repo.Delete(ctx, id)
 }
 
 // Escalate changes the incident status to ESCALATED.

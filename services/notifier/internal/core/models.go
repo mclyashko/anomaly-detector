@@ -52,10 +52,14 @@ type AnomalyPayload struct {
 	Rule      string  `json:"rule"`
 	Service   string  `json:"service"`
 	Metric    string  `json:"metric"`
+	MetricID  int64   `json:"metric_id"`
 	Value     float64 `json:"value"`
 	Severity  string  `json:"severity"`
 	Message   string  `json:"message"`
 	Timestamp int64   `json:"timestamp"`
+	AgentID   string  `json:"agent_id,omitempty"`
+	Condition string  `json:"condition,omitempty"`
+	ID        int64   `json:"id,omitempty"`
 }
 
 // TimestampSetter is implemented by types that can parse timestamps from various formats.

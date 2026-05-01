@@ -24,7 +24,7 @@ func metric(name string, value float64, agentID string) core.Metric {
 func TestRuleEngine_Evaluate_FiresAnomaly(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	anomalies := engine.Evaluate(metric("cpu", 0.95, "agent-1"))
 	if len(anomalies) != 1 {
@@ -45,7 +45,7 @@ func TestRuleEngine_Evaluate_FiresAnomaly(t *testing.T) {
 func TestRuleEngine_Evaluate_NoMatch(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	if len(engine.Evaluate(metric("cpu", 0.5, "agent-1"))) != 0 {
 		t.Error("expected no anomalies for normal value")
@@ -55,7 +55,7 @@ func TestRuleEngine_Evaluate_NoMatch(t *testing.T) {
 func TestRuleEngine_Evaluate_WrongMetric(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	if len(engine.Evaluate(metric("memory", 0.99, "agent-1"))) != 0 {
 		t.Error("expected no anomalies for non-matching metric name")
@@ -69,7 +69,7 @@ func TestRuleEngine_EvaluateBatch_MultipleAnomalies(t *testing.T) {
 	memCfg := core.RuleConfig{Name: "high-mem", Metric: "memory", Type: core.RuleTypeThreshold, Condition: "value > 0.9", Severity: core.SeverityCritical}
 	cpuRule, _ := core.NewThresholdRule(cpuCfg)
 	memRule, _ := core.NewThresholdRule(memCfg)
-	engine := core.NewRuleEngine([]core.Rule{cpuRule, memRule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{cpuRule, memRule}, discardLogger(), nil)
 
 	batch := core.Batch{
 		AgentID: "agent-1",
@@ -89,7 +89,7 @@ func TestRuleEngine_EvaluateBatch_MultipleAnomalies(t *testing.T) {
 func TestRuleEngine_EvaluateBatch_NoAnomalies(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	batch := core.Batch{
 		AgentID: "agent-1",
@@ -107,7 +107,7 @@ func TestRuleEngine_EvaluateBatch_NoAnomalies(t *testing.T) {
 func TestRuleEngine_EvaluateBatch_ParallelPath(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high", Metric: "m", Type: core.RuleTypeThreshold, Condition: "value > 0", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	// Create a batch large enough to trigger parallel evaluation (>= 500 metrics).
 	// batchParallelThreshold = 500, chunkSize = 200
@@ -137,7 +137,7 @@ func TestRuleEngine_EvaluateBatch_ParallelPath(t *testing.T) {
 func TestRuleEngine_EvaluateBatch_EmptyBatch(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
 
 	batch := core.Batch{
 		AgentID: "agent-1",

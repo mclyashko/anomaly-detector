@@ -29,5 +29,6 @@ CREATE INDEX IF NOT EXISTS idx_metrics_agent_time ON metrics (agent_id, time DES
 -- Index on metric name for filtered queries.
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics (name);
 
--- Index for analyzer polling: only unanalyzed metrics.
-CREATE INDEX IF NOT EXISTS idx_metrics_analyzed ON metrics (analyzed_at) WHERE analyzed_at IS NULL;
+-- Index for analyzer polling: unanalyzed metrics, ordered by time.
+-- Composite (analyzed_at, time) satisfies both WHERE and ORDER BY — no Sort node needed.
+CREATE INDEX IF NOT EXISTS idx_metrics_analyzed_time ON metrics (analyzed_at, time) WHERE analyzed_at IS NULL;

@@ -5,9 +5,11 @@ import (
 	stdlibhttp "net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/broker"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/channels/log"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/http"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/storage/postgres"
@@ -43,6 +45,13 @@ func main() {
 	logChannel := log.New(logger)
 	svc := core.NewNotifierService(repo, logChannel, logger)
 
+	// Create Kafka consumer for anomaly events.
+	brokers := strings.Split(cfg.KafkaBrokers, ",")
+	for i := range brokers {
+		brokers[i] = strings.TrimSpace(brokers[i])
+	}
+	consumer := broker.NewConsumer(broker.ConsumerConfig{Brokers: brokers}, svc, logger)
+
 	// Create HTTP handlers.
 	uiHandler := ui.New(svc, logger)
 	handler := http.New(svc, uiHandler, logger)
@@ -64,6 +73,13 @@ func main() {
 		}
 	}()
 
+	// Start Kafka consumer in background.
+	go func() {
+		if err := consumer.Consume(context.Background()); err != nil {
+			logger.Error("kafka consumer error", "err", err)
+		}
+	}()
+
 	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -73,6 +89,7 @@ func main() {
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 
+	consumer.Stop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "err", err)
 	}

@@ -147,7 +147,6 @@ func (h *Handler) handleComment(w http.ResponseWriter, r *http.Request) {
 
 // handleNotification receives anomaly events from the analyzer.
 func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
-	// Read the body first so we can try multiple decodings.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.logger.Warn("failed to read request body", "err", err)
@@ -157,7 +156,7 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	// Try analyzer's wrapper format first: {"anomalies": [...], "count": N}
+	// Try wrapper format: {"anomalies": [...], "count": N}
 	var wrapper struct {
 		Anomalies []struct {
 			Rule      string  `json:"rule"`
@@ -173,7 +172,8 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.Unmarshal(body, &wrapper); err == nil && len(wrapper.Anomalies) > 0 {
-		// Process each anomaly from analyzer.
+		// Collect all results first; fail atomically on non-duplicate errors.
+		created := 0
 		for _, a := range wrapper.Anomalies {
 			payload := &core.AnomalyPayload{
 				Rule:     a.Rule,
@@ -183,18 +183,20 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 				Severity: a.Severity,
 				Message:  a.Message,
 			}
-
 			incident, err := h.svc.HandleAnomaly(ctx, payload)
 			if err != nil {
-				h.logger.Error("failed to handle anomaly", "err", err)
+				h.logger.Error("failed to handle anomaly in batch",
+					"index", created, "rule", a.Rule, "err", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]string{"incident_id": incident.ID})
+			if incident != nil {
+				created++
+			}
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"incident_id": "batch", "count": created})
 		return
 	}
 
