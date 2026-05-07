@@ -1,0 +1,25 @@
+{
+  "model_id": "test-sin-agent__test_signal",
+  "agent_id": "test-sin-agent",
+  "metric_name": "test.signal",
+  "ar_params": -0.5081220869673425,
+  "ma_params": 0.5457854770640259,
+  "seasonal_ar_params": -0.4852721780730511,
+  "seasonal_ma_params": -0.4101973095366411,
+  "residual_std": 19.756949358349164,
+  "confidence_level": 0.95,
+  "seasonality_period": 24,
+  "window_size": 48,
+  "order": [
+    1,
+    0,
+    1
+  ],
+  "seasonal_order": [
+    1,
+    1,
+    1,
+    24
+  ],
+  "trained_at": "2026-05-01T21:33:50.637780+00:00"
+}

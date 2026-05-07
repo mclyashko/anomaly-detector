@@ -224,7 +224,7 @@ func (r *Repository) GetEvents(ctx context.Context, incidentID string) ([]core.I
 		SELECT id, incident_id, payload, timestamp, created_at
 		FROM incident_events
 		WHERE incident_id = $1
-		ORDER BY timestamp ASC
+		ORDER BY created_at ASC
 	`
 	rows, err := r.pool.Query(ctx, query, incidentID)
 	if err != nil {

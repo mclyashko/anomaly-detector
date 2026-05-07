@@ -1,11 +1,18 @@
 rules:
   - name: test_signal_ml
-    agent_id: agent-test
+    enabled: false
+    agent_id: agent-1
     metric: test.signal
     type: ml
     severity: critical
+    train_interval_min: 30
+    train_data_window: 500
+    seasonality_period: 60
+    order: [1, 0, 1]
+    seasonal_order: [1, 1, 1, 60]
 
   - name: high_cpu
+    enabled: false
     agent_id: agent-1
     metric: http.latency_avg_ms
     type: threshold
@@ -13,6 +20,7 @@ rules:
     severity: warning
 
   - name: very_high_cpu
+    enabled: false
     agent_id: agent-1
     metric: http.latency_avg_ms
     type: threshold
@@ -20,6 +28,7 @@ rules:
     severity: critical
 
   - name: high_worker_load
+    enabled: false
     agent_id: agent-1
     metric: worker.ops_total
     type: threshold
@@ -27,8 +36,21 @@ rules:
     severity: warning
 
   - name: error_rate_high
+    enabled: false
     agent_id: agent-1
     metric: http.error_rate
     type: threshold
     condition: "value > 0.05"
     severity: critical
+
+  - name: new_signal_ml
+    enabled: true
+    agent_id: agent-1
+    metric: test.signal
+    type: ml
+    severity: critical
+    train_interval_min: 30
+    train_data_window: 200
+    seasonality_period: 60
+    order: [1, 0, 1]
+    seasonal_order: [1, 1, 1, 60]

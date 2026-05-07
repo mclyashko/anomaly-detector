@@ -15,19 +15,26 @@ type BatchHandler interface {
 	ProcessBatch(ctx context.Context, batch core.Batch)
 }
 
-// Handler wires HTTP routes to the analyzer.
-type Handler struct {
-	svc    BatchHandler
-	logger *slog.Logger
+// MLRulesProvider exposes ML rule training config for the training service.
+type MLRulesProvider interface {
+	GetMLRules() []core.MLRuleInfo
 }
 
-func New(svc BatchHandler, logger *slog.Logger) *Handler {
-	return &Handler{svc: svc, logger: logger}
+// Handler wires HTTP routes to the analyzer.
+type Handler struct {
+	svc         BatchHandler
+	mlRules     MLRulesProvider
+	logger      *slog.Logger
+}
+
+func New(svc BatchHandler, mlRules MLRulesProvider, logger *slog.Logger) *Handler {
+	return &Handler{svc: svc, mlRules: mlRules, logger: logger}
 }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/analyze", h.handleAnalyze)
+	mux.HandleFunc("GET /api/v1/ml-rules", h.handleMLRules)
 	mux.HandleFunc("GET /healthz", h.handleHealth)
 	return mux
 }
@@ -103,4 +110,10 @@ func (r ingestRequest) toDomainWithTSCheck() (core.Batch, int) {
 
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) handleMLRules(w http.ResponseWriter, _ *http.Request) {
+	rules := h.mlRules.GetMLRules()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rules)
 }

@@ -12,8 +12,12 @@ import (
 // Cross-platform; no cgo or /proc dependencies.
 type SystemCollector struct{}
 
+// NewSystemCollector создаёт коллектор, который собирает runtime-метрики Go процесса:
+// memory (heap alloc/sys/inuse, stack), GC (last pause, total runs), goroutines.
+// Работает без cgo и без /proc — кроссплатформенный.
 func NewSystemCollector() *SystemCollector { return &SystemCollector{} }
 
+// Name возвращает имя коллектора для логирования.
 func (c *SystemCollector) Name() string { return "system" }
 
 func (c *SystemCollector) Collect(_ context.Context) ([]domain.Metric, error) {

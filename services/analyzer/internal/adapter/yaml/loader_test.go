@@ -13,6 +13,7 @@ func TestLoader_ValidFile(t *testing.T) {
 	content := `
 rules:
   - name: high-cpu
+    enabled: true
     metric: cpu_usage
     type: threshold
     condition: "value > 0.8"
@@ -48,11 +49,13 @@ func TestLoader_MultipleRules(t *testing.T) {
 	content := `
 rules:
   - name: rule1
+    enabled: true
     metric: m1
     type: threshold
     condition: "value > 0.5"
     severity: info
   - name: rule2
+    enabled: true
     metric: m2
     type: threshold
     condition: "value > 0.9"
@@ -87,10 +90,42 @@ func TestLoader_InvalidYAML(t *testing.T) {
 	}
 }
 
+func TestLoader_DisabledRule_Filtered(t *testing.T) {
+	content := `
+rules:
+  - name: enabled-rule
+    enabled: true
+    metric: m1
+    type: threshold
+    condition: "value > 0.5"
+    severity: info
+  - name: disabled-rule
+    enabled: false
+    metric: m2
+    type: threshold
+    condition: "value > 0.9"
+    severity: critical
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	configs, err := yaml.NewLoader(tmp).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 1 {
+		t.Errorf("got %d rules, want 1 (disabled rule filtered)", len(configs))
+	}
+	if configs[0].Name != "enabled-rule" {
+		t.Errorf("got rule %q, want enabled-rule", configs[0].Name)
+	}
+}
+
 func TestLoader_MissingName(t *testing.T) {
 	content := `
 rules:
-  - metric: cpu
+  - enabled: true
+    metric: cpu
     type: threshold
     condition: "value > 0.8"
     severity: warning
@@ -108,6 +143,7 @@ func TestLoader_MissingMetric(t *testing.T) {
 	content := `
 rules:
   - name: r1
+    enabled: true
     type: threshold
     condition: "value > 0.8"
     severity: warning
@@ -125,6 +161,7 @@ func TestCompileRules(t *testing.T) {
 	content := `
 rules:
   - name: high-cpu
+    enabled: true
     metric: cpu_usage
     type: threshold
     condition: "value > 0.8"

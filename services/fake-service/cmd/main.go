@@ -30,8 +30,10 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/signal-state", reg.SignalStateHandler())
+	mux.HandleFunc("/signal-switch", reg.SignalSwitchHandler())
 
-	// Wrap the whole mux so every request (including /metrics scrapes) is measured.
+	// Wrap the whole mux so every request (including /metrics scrapes) are measured.
 	handler := trackingMiddleware(reg, mux)
 
 	srv := &http.Server{
@@ -43,6 +45,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Start signal generator — updates every 1s
+	go reg.StartSignalGenerator(ctx, time.Second)
 
 	pool := worker.NewPool(cfg.WorkerCount, reg, logger)
 	pool.Start(ctx)

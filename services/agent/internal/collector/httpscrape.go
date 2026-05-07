@@ -16,6 +16,7 @@ type scrapeResponse struct {
 	HTTPErrorsTotal   int64   `json:"http_errors_total"`
 	HTTPLatencyAvgMs  float64 `json:"http_latency_avg_ms"`
 	WorkerOpsTotal    int64   `json:"worker_ops_total"`
+	TestSignal        float64 `json:"test_signal"`
 }
 
 // HTTPScrapeCollector calls a service's /metrics endpoint and maps the
@@ -26,6 +27,8 @@ type HTTPScrapeCollector struct {
 	client      *http.Client
 }
 
+// NewHTTPScrapeCollector создаёт HTTP-скрейпер для указанного сервиса.
+// serviceName используется как label в метриках, metricsURL — эндпоинт /metrics.
 func NewHTTPScrapeCollector(serviceName, metricsURL string) *HTTPScrapeCollector {
 	return &HTTPScrapeCollector{
 		serviceName: serviceName,
@@ -34,6 +37,7 @@ func NewHTTPScrapeCollector(serviceName, metricsURL string) *HTTPScrapeCollector
 	}
 }
 
+// Name возвращает имя коллектора в формате "http_scrape:{serviceName}".
 func (c *HTTPScrapeCollector) Name() string { return "http_scrape:" + c.serviceName }
 
 func (c *HTTPScrapeCollector) Collect(ctx context.Context) ([]domain.Metric, error) {
@@ -65,5 +69,6 @@ func (c *HTTPScrapeCollector) Collect(ctx context.Context) ([]domain.Metric, err
 		{Name: "http.errors_total", Value: float64(s.HTTPErrorsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
 		{Name: "http.latency_avg_ms", Value: s.HTTPLatencyAvgMs, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
 		{Name: "worker.ops_total", Value: float64(s.WorkerOpsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
+		{Name: "test.signal", Value: s.TestSignal, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
 	}, nil
 }

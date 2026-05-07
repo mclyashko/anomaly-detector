@@ -78,7 +78,7 @@ func (m *mockMetricFetcher) IsMarkAnalyzedCalled() bool {
 // --- AnalyzerService tests ---
 
 func TestAnalyzerService_NoMetrics_DoesNotProduce(t *testing.T) {
-	engine := core.NewRuleEngine([]core.Rule{}, discardLogger(), nil)
+	engine := core.NewRuleEngine([]core.Rule{}, discardLogger())
 	fetcher := &mockMetricFetcher{}
 	producer := &mockProducer{}
 	svc := core.NewAnalyzerService(fetcher, engine, producer, "test-analyzer", 100, discardLogger())
@@ -97,7 +97,7 @@ func TestAnalyzerService_NoMetrics_DoesNotProduce(t *testing.T) {
 func TestAnalyzerService_WithAnomalies_Produces(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
 
 	fetcher := &mockMetricFetcher{
 		fetched: []core.Metric{
@@ -134,7 +134,7 @@ func TestAnalyzerService_WithAnomalies_Produces(t *testing.T) {
 func TestAnalyzerService_ProducerFailure_Continues(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
 
 	fetcher := &mockMetricFetcher{
 		fetched: []core.Metric{
@@ -155,7 +155,7 @@ func TestAnalyzerService_ProducerFailure_Continues(t *testing.T) {
 func TestAnalyzerService_MarksMetricsAsAnalyzed(t *testing.T) {
 	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
 	rule, _ := core.NewThresholdRule(cfg)
-	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger(), nil)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
 
 	fetcher := &mockMetricFetcher{
 		fetched: []core.Metric{

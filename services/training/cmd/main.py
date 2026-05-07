@@ -106,6 +106,15 @@ def train_single(
 
 
 def main() -> None:
+    """Entry point for the training CLI.
+
+    Supports two modes:
+    - 'serve': runs a periodic training loop (default, scheduled via --interval).
+      First run executes immediately on startup, then repeats every interval.
+    - 'train-single': trains and uploads one model then exits (useful for testing/CI).
+
+    Environment variables can be used as defaults for most arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(description="Training service")

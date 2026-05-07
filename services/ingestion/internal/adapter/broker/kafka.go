@@ -40,10 +40,7 @@ const (
 )
 
 // KafkaConsumer implements port.MetricConsumer on top of a Kafka topic.
-// It fetches messages from Kafka and dispatches them to a worker pool,
-// which deserializes JSON and calls the ingestion service.
-// A bounded channel applies backpressure: if the service is slower than
-// the broker, fetching pauses automatically.
+// It fetches messages from Kafka and dispatches them to a worker pool.
 type KafkaConsumer struct {
 	cfg ConsumerConfig
 	logger  *slog.Logger
@@ -62,6 +59,16 @@ type kafkaFetcher interface {
 	FetchMessage(ctx context.Context) (kafkago.Message, error)
 	CommitMessages(ctx context.Context, msgs ...kafkago.Message) error
 	io.Closer
+}
+
+func makeKafkaFetcher(cfg ConsumerConfig) *kafkago.Reader {
+	return kafkago.NewReader(kafkago.ReaderConfig{
+		Brokers:  cfg.Brokers,
+		Topic:    cfg.Topic,
+		GroupID: cfg.GroupID,
+		MinBytes: 1024,
+		MaxBytes: 1048576,
+	})
 }
 
 // NewKafkaConsumer creates a consumer that feeds batches into svc.
@@ -94,13 +101,7 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 
 	// Lazily create the Kafka reader so tests can inject a stub via .reader field.
 	if c.reader == nil {
-		c.reader = kafkago.NewReader(kafkago.ReaderConfig{
-			Brokers:  c.cfg.Brokers,
-			Topic:    c.cfg.Topic,
-			GroupID:  c.cfg.GroupID,
-			MinBytes: 1024,
-			MaxBytes: 1048576,
-		})
+		c.reader = makeKafkaFetcher(c.cfg)
 	}
 
 	// Launch workers.
@@ -116,7 +117,6 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				// No message within timeout — loop and check ctx / backpressure.
 				continue
 			}
 			if errors.Is(err, context.Canceled) {
@@ -134,13 +134,10 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 		// Try to enqueue for a worker.
 		select {
 		case c.jobs <- rawMessage{msg: msg, receivedAt: time.Now()}:
-			// Job enqueued successfully.
 		default:
-			// Channel full — drop the oldest to make room.
 			c.logger.Warn("ingestion queue full, dropping oldest kafka message")
 			select {
 			case <-c.jobs:
-				// Dropped.
 			default:
 			}
 			c.jobs <- rawMessage{msg: msg, receivedAt: time.Now()}
@@ -149,9 +146,6 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down workers and closes the Kafka reader.
-// It closes the jobs channel and waits up to shutdownTimeout for all workers
-// to finish. If the timeout expires, remaining workers are abandoned and the
-// Kafka reader is closed anyway.
 func (c *KafkaConsumer) Stop() {
 	c.stopMu.Lock()
 	if c.stopped {
@@ -164,7 +158,6 @@ func (c *KafkaConsumer) Stop() {
 	c.logger.Info("kafka consumer stopping")
 	close(c.jobs)
 
-	// Wait for workers to drain with a timeout.
 	done := make(chan struct{})
 	go func() {
 		c.wg.Wait()
@@ -185,7 +178,6 @@ func (c *KafkaConsumer) Stop() {
 }
 
 // worker processes messages from the job channel.
-// It stops immediately when the jobs channel is closed.
 func (c *KafkaConsumer) worker() {
 	defer c.wg.Done()
 	for job := range c.jobs {
@@ -212,7 +204,6 @@ func (c *KafkaConsumer) process(job rawMessage) {
 			"offset", job.msg.Offset,
 			"err", err,
 		)
-		// Commit so we don't re-process a bad message.
 		_ = c.reader.CommitMessages(context.Background(), job.msg)
 		return
 	}
@@ -232,9 +223,6 @@ func (c *KafkaConsumer) process(job rawMessage) {
 	}
 
 	// Submit with retry.
-	// commitNow semantics:
-	//  - validation error:   commit immediately (message is permanently invalid, don't retry)
-	//  - transient error:     retry with backoff; on success commit; on exhaust → don't commit (redelivered)
 	commitNow := false
 	for attempt := 0; attempt <= 3; attempt++ {
 		if attempt > 0 {
@@ -243,7 +231,6 @@ func (c *KafkaConsumer) process(job rawMessage) {
 		if err := c.service.HandleBatch(context.Background(), batch); err != nil {
 			var ve *core.ValidationError
 			if errors.As(err, &ve) {
-				// Validation errors are permanent — commit and drop the message.
 				c.logger.Warn("invalid batch from kafka, skipping",
 					"agent_id", payload.AgentID, "err", err)
 				commitNow = true
@@ -254,13 +241,10 @@ func (c *KafkaConsumer) process(job rawMessage) {
 					"attempt", attempt, "err", err)
 				continue
 			}
-			// Exhausted retries — log error and return without committing.
-			// Message will be redelivered by Kafka when this consumer rebalances.
 			c.logger.Error("HandleBatch failed after retries, message will be redelivered",
 				"agent_id", payload.AgentID, "err", err)
 			return
 		}
-		// Success.
 		commitNow = true
 		break
 	}

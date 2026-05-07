@@ -48,6 +48,8 @@ func (s *Storage) Save(ctx context.Context, b core.Batch) error {
 		return nil
 	}
 
+	s.logger.Debug("saving batch", "agent_id", b.AgentID, "metrics", len(b.Metrics))
+
 	// Build a single INSERT with a VALUES clause per row.
 	// pgxExec expects one $N placeholder per value, repeating for each row.
 	var args []any
@@ -73,7 +75,9 @@ func (s *Storage) Save(ctx context.Context, b core.Batch) error {
 		strings.Join(vals, ","))
 	_, err := s.pool.Exec(ctx, sql, args...)
 	if err != nil {
+		s.logger.Error("batch insert failed", "agent_id", b.AgentID, "rows", len(vals), "err", err)
 		return fmt.Errorf("batch insert %d rows: %w", len(vals), err)
 	}
+	s.logger.Info("batch inserted", "agent_id", b.AgentID, "rows", len(vals))
 	return nil
 }

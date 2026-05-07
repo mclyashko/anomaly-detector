@@ -70,3 +70,45 @@ class TimescaleDBRepository:
         series = pd.Series(values, index=times)
         series.index.name = "time"
         return series
+
+    def fetch_recent(
+        self,
+        agent_id: str,
+        metric_name: str,
+        limit: int,
+    ) -> list[float]:
+        """Fetch the most recent N values from TimescaleDB for training.
+
+        Returns values in ascending time order (oldest first), suitable for
+        SARIMA training.
+        """
+        query = """
+            SELECT value
+            FROM metrics
+            WHERE agent_id = %s
+              AND name = %s
+            ORDER BY time DESC
+            LIMIT %s
+        """
+
+        try:
+            conn = psycopg2.connect(self._dsn)
+            cur = conn.cursor()
+            cur.execute(query, (agent_id, metric_name, limit))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+        except Exception:
+            logger.exception("TimescaleDB fetch_recent failed for %s/%s limit=%d", agent_id, metric_name, limit)
+            return []
+
+        if not rows:
+            logger.warning(
+                "no data for agent_id=%s metric_name=%s limit=%d",
+                agent_id,
+                metric_name,
+                limit,
+            )
+            return []
+
+        return [float(r[0]) for r in rows][::-1]

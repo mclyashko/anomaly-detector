@@ -8,20 +8,22 @@ import (
 	"time"
 )
 
-// ErrIncidentNotFound is returned when an incident does not exist.
+// ErrIncidentNotFound возвращается когда инцидент не найден.
 var ErrIncidentNotFound = errors.New("incident not found")
 
-// ErrInvalidStatusTransition is returned when a status transition is not allowed.
+// ErrInvalidStatusTransition возвращается при недопустимой смене статуса.
 var ErrInvalidStatusTransition = errors.New("invalid status transition")
 
-// NotifierService handles incident lifecycle management.
+// NotifierService управляет жизненным циклом инцидентов.
+// Инциденты создаются при обнаружении аномалий и обновляются при поступлении новых данных
+// с тем же rule+service+metric (deduplication).
 type NotifierService struct {
-	repo    IncidentRepository
-	channel NotifierChannel
+	repo    IncidentRepository // доступ к данным инцидентов
+	channel NotifierChannel     // уведомления (логирование и т.д.)
 	logger  *slog.Logger
 }
 
-// NewNotifierService creates a new notifier service.
+// NewNotifierService создаёт новый сервис.
 func NewNotifierService(repo IncidentRepository, channel NotifierChannel, logger *slog.Logger) *NotifierService {
 	return &NotifierService{
 		repo:    repo,
@@ -30,7 +32,12 @@ func NewNotifierService(repo IncidentRepository, channel NotifierChannel, logger
 	}
 }
 
-// HandleAnomaly processes an anomaly event, creating or updating an incident.
+// HandleAnomaly обрабатывает аномалию от analyzer.
+// Логика:
+//   - Ищет существующий открытый инцидент с тем же rule+service+metric (dedup key).
+//   - Если нашёл — обновляет его (status=UPDATED) и добавляет событие.
+//   - Если не нашёл — создаёт новый инцидент (status=OPEN) и событие в одной транзакции.
+// Это гарантирует что новые аномалии по тому же rule+service+metric не создают новых инцидентов.
 func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPayload) (*Incident, error) {
 	// Check for existing open incident with same dedup key.
 	existing, err := s.repo.FindByDedupKey(ctx, payload.Rule, payload.Service, payload.Metric)
@@ -42,6 +49,12 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 		// Update existing incident.
 		existing.Status = StatusUpdated
 		existing.UpdatedAt = time.Now().UTC()
+		existing.Value = payload.Value
+		existing.Forecast = payload.Forecast
+		existing.ExpectedValue = payload.Forecast
+		existing.LowerCI = payload.LowerCI
+		existing.UpperCI = payload.UpperCI
+		existing.Message = payload.Message
 		if err := s.repo.Update(ctx, existing); err != nil {
 			return nil, err
 		}
@@ -66,13 +79,19 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 
 	// Create new incident atomically with the initial event.
 	incident := &Incident{
-		Rule:      payload.Rule,
-		Service:   payload.Service,
-		Metric:    payload.Metric,
-		Status:    StatusOpen,
-		Severity:  payload.Severity,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		Rule:         payload.Rule,
+		Service:      payload.Service,
+		Metric:       payload.Metric,
+		Status:       StatusOpen,
+		Severity:     payload.Severity,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+		Value:        payload.Value,
+		Forecast:     payload.Forecast,
+		ExpectedValue: payload.Forecast,
+		LowerCI:      payload.LowerCI,
+		UpperCI:      payload.UpperCI,
+		Message:      payload.Message,
 	}
 	event := &IncidentEvent{
 		IncidentID: "", // filled after CreateInTx generates the ID
@@ -108,12 +127,13 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 	return incident, nil
 }
 
-// Delete removes an incident by ID (used for compensating actions).
+// Delete удаляет инцидент (используется для компенсирующих действий).
 func (s *NotifierService) Delete(ctx context.Context, id string) error {
 	return s.repo.Delete(ctx, id)
 }
 
-// Escalate changes the incident status to ESCALATED.
+// Escalate меняет статус инцидента на ESCALATED.
+// Нельзя эскалировать уже закрытый инцидент (ErrInvalidStatusTransition).
 func (s *NotifierService) Escalate(ctx context.Context, id string) (*Incident, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -142,7 +162,9 @@ func (s *NotifierService) Escalate(ctx context.Context, id string) (*Incident, e
 	return incident, nil
 }
 
-// Resolve changes the incident status to RESOLVED with a resolution message.
+// Resolve закрывает инцидент с резолюцией.
+// Устанавливает status=RESOLVED, ResolvedAt=текущее время, Resolution=текст резолюции.
+// Нельзя закрыть уже закрытый инцидент (ErrInvalidStatusTransition).
 func (s *NotifierService) Resolve(ctx context.Context, id, resolution string) (*Incident, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -171,7 +193,8 @@ func (s *NotifierService) Resolve(ctx context.Context, id, resolution string) (*
 	return incident, nil
 }
 
-// AddComment adds a comment to an incident.
+// AddComment добавляет комментарий к инциденту.
+// Также обновляет UpdatedAt инцидента (чтобы изменить порядок в списке).
 func (s *NotifierService) AddComment(ctx context.Context, id, text string) (*IncidentComment, error) {
 	// Verify incident exists.
 	if _, err := s.repo.FindByID(ctx, id); err != nil {
@@ -201,7 +224,7 @@ func (s *NotifierService) AddComment(ctx context.Context, id, text string) (*Inc
 	return comment, nil
 }
 
-// GetIncident retrieves a single incident with events and comments.
+// GetIncident возвращает инцидент со всеми событиями и комментариями.
 func (s *NotifierService) GetIncident(ctx context.Context, id string) (*IncidentWithDetails, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -225,7 +248,7 @@ func (s *NotifierService) GetIncident(ctx context.Context, id string) (*Incident
 	}, nil
 }
 
-// ListIncidents returns all incidents ordered by updated_at descending.
+// ListIncidents возвращает все инциденты, отсортированные по updated_at (сначала свежие).
 func (s *NotifierService) ListIncidents(ctx context.Context) ([]Incident, error) {
 	return s.repo.List(ctx)
 }

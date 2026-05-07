@@ -18,7 +18,19 @@ SELECT create_hypertable('metrics', 'time', if_not_exists => TRUE);
 
 -- Primary key must include the partitioning column (time), so use a composite pk.
 -- This also satisfies the unique index requirement for hypertables.
-ALTER TABLE metrics ADD PRIMARY KEY (time, id);
+-- BIGSERIAL already creates an implicit pk on `id`, so we need to drop it first.
+DO $$
+BEGIN
+    -- Drop the implicit bigserial primary key if it exists
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'metrics_pkey' AND contype = 'p') THEN
+        ALTER TABLE metrics DROP CONSTRAINT metrics_pkey;
+    END IF;
+    -- Add composite primary key (time, id)
+    ALTER TABLE metrics ADD PRIMARY KEY (time, id);
+EXCEPTION
+    WHEN undefined_object THEN NULL; -- already migrated
+END
+$$;
 
 -- Index on id for direct lookups (non-unique, since time is in the pk).
 CREATE INDEX IF NOT EXISTS idx_metrics_id ON metrics (id);

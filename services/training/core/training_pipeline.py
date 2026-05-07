@@ -149,12 +149,16 @@ class TrainingPipeline:
             onnx_bytes = export_sarima_to_onnx(result.params, window_size=cfg.window_size)
 
             # Step 5: Build metadata.
+            # Этот dict сохраняется как metadata.json рядом с ONNX моделью в MinIO.
+            # Все поля кроме SARIMA params также записываются в TimescaleDB при обучении.
             metadata = {
+                # Идентификация модели
                 "agent_id": cfg.agent_id,
                 "metric_name": cfg.metric_name,
                 "model_type": cfg.model_type,
                 "version": version,
                 "model_name": model_full_name,
+                # Времена обучения
                 "training_timestamp": datetime.now(timezone.utc).isoformat(),
                 "training_window_days": cfg.training_window_days,
                 "training_n": result.training_n,
@@ -164,17 +168,22 @@ class TrainingPipeline:
                 "training_end": (
                     result.training_end.isoformat() if result.training_end else None
                 ),
+                # SARIMA config
                 "seasonality_period": cfg.seasonality_period,
                 "confidence_level": cfg.confidence_level,
                 "aicc": result.aicc,
                 "order": result.order,
                 "seasonal_order": result.seasonal_order,
-                # SARIMA parameters — required for Go-side inference.
+                # SARIMA параметры — критичны для Go-side инференса в infer.py.
+                # ar_params, ma_params: краткосрочная авторегрессия и скользящее среднее.
+                # seasonal_ar_params, seasonal_ma_params: сезонная коррекция (реагирует на S периодов назад).
+                # residual_std: std остатков модели — определяет ширину доверительного интервала.
                 "ar_params": result.params.get("ar_params"),
                 "ma_params": result.params.get("ma_params"),
                 "seasonal_ar_params": result.params.get("seasonal_ar_params"),
                 "seasonal_ma_params": result.params.get("seasonal_ma_params"),
                 "residual_std": result.params.get("residual_std"),
+                # d, seasonal_d: порядки разностей (d=1 значит ряд был один раз продифференцирован).
                 "d": result.params.get("d"),
                 "seasonal_d": result.params.get("seasonal_d"),
                 "window_size": result.params.get("window_size", 48),

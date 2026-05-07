@@ -66,7 +66,10 @@ func (p *Producer) Produce(ctx context.Context, anomalies []*core.Anomaly) error
 		return err
 	}
 
-	p.logger.Debug("anomalies produced to kafka", "count", len(msgs))
+	p.logger.Info("anomalies published to Kafka",
+		"count", len(msgs),
+		"topics", anomaliesTopic,
+	)
 	return nil
 }
 

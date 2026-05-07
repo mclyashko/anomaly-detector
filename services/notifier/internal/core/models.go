@@ -6,7 +6,11 @@ import (
 	"time"
 )
 
-// IncidentStatus represents the lifecycle state of an incident.
+// IncidentStatus — статус жизненного цикла инцидента.
+// OPEN: только создан
+// UPDATED: пришли новые данные по тому же инциденту (rule+service+metric)
+// ESCALATED: эскалирован
+// RESOLVED: закрыт с резолюцией
 type IncidentStatus string
 
 const (
@@ -16,30 +20,39 @@ const (
 	StatusResolved  IncidentStatus = "RESOLVED"
 )
 
-// Incident represents a tracked anomaly incident.
+// Incident — аномальный инцидент.
+// Value, Forecast, LowerCI, UpperCI, Message — последние ML-данные.
+// Сами события (events) хранят полную историю всех аномалий.
 type Incident struct {
-	ID         string         `json:"id"`
-	Rule       string         `json:"rule"`
-	Service    string         `json:"service"`
-	Metric     string         `json:"metric"`
-	Status     IncidentStatus `json:"status"`
-	Severity   string         `json:"severity"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	ResolvedAt *time.Time     `json:"resolved_at,omitempty"`
-	Resolution string         `json:"resolution,omitempty"`
+	ID            string         `json:"id"`
+	Rule          string         `json:"rule"`
+	Service      string         `json:"service"`
+	Metric       string         `json:"metric"`
+	Status       IncidentStatus `json:"status"`
+	Severity     string         `json:"severity"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	ResolvedAt   *time.Time     `json:"resolved_at,omitempty"`
+	Resolution   string         `json:"resolution,omitempty"`
+	Value        float64        `json:"value,omitempty"`
+	Forecast     float64        `json:"forecast,omitempty"`
+	ExpectedValue float64       `json:"expected_value,omitempty"`
+	LowerCI      float64        `json:"lower_ci,omitempty"`
+	UpperCI      float64        `json:"upper_ci,omitempty"`
+	Message      string         `json:"message,omitempty"`
 }
 
-// IncidentEvent represents an anomaly event attached to an incident.
+// IncidentEvent — одно событие аномалии, привязанное к инциденту.
+// Payload хранит JSON с полными данными аномалии (включая ML-информацию).
 type IncidentEvent struct {
 	ID         string          `json:"id"`
 	IncidentID string          `json:"incident_id"`
 	Payload    json.RawMessage `json:"payload"`
-	Timestamp  time.Time       `json:"timestamp"`
-	CreatedAt  time.Time       `json:"created_at"`
+	Timestamp  time.Time       `json:"timestamp"` // время из самой метрики (когда она была)
+	CreatedAt  time.Time       `json:"created_at"` // когда событие реально создалось в БД
 }
 
-// IncidentComment represents a comment on an incident.
+// IncidentComment — комментарий к инциденту.
 type IncidentComment struct {
 	ID         string    `json:"id"`
 	IncidentID string    `json:"incident_id"`
@@ -47,22 +60,31 @@ type IncidentComment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// AnomalyPayload is the incoming event from the analyzer.
+// AnomalyPayload — входящее событие от analyzer.
+// Используем custom UnmarshalJSON чтобы корректно парсить timestamp из разных форматов
+// (RFC3339 строка или Unix timestamp).
 type AnomalyPayload struct {
-	Rule      string  `json:"rule"`
-	Service   string  `json:"service"`
-	Metric    string  `json:"metric"`
-	MetricID  int64   `json:"metric_id"`
-	Value     float64 `json:"value"`
-	Severity  string  `json:"severity"`
-	Message   string  `json:"message"`
-	Timestamp int64   `json:"timestamp"`
-	AgentID   string  `json:"agent_id,omitempty"`
-	Condition string  `json:"condition,omitempty"`
-	ID        int64   `json:"id,omitempty"`
+	Rule          string  `json:"rule"`
+	Service       string  `json:"service"`
+	Metric        string  `json:"metric"`
+	MetricID      int64   `json:"metric_id"`
+	Value         float64 `json:"value"`
+	Severity      string  `json:"severity"`
+	Message       string  `json:"message"`
+	Timestamp     int64   `json:"timestamp"` // Unix timestamp в секундах
+	AgentID       string  `json:"agent_id,omitempty"`
+	Condition     string  `json:"condition,omitempty"`
+	ID            int64   `json:"id,omitempty"`
+	Forecast      float64 `json:"forecast,omitempty"`
+	ExpectedValue float64 `json:"expected_value,omitempty"`
+	LowerCI       float64 `json:"lower_ci,omitempty"`
+	UpperCI       float64 `json:"upper_ci,omitempty"`
 }
 
-// TimestampSetter is implemented by types that can parse timestamps from various formats.
+// SetTimestamp парсит timestamp из разных форматов.
+// Приоритет: RFC3339 (2026-05-07T18:04:16Z) → Unix timestamp строка (1746643456).
+// Это исправляет баг, когда строка "2026" парсилась как Unix timestamp 2026 секунд
+// вместо того чтобы попробовать RFC3339 формат.
 func (a *AnomalyPayload) SetTimestamp(v any) error {
 	switch val := v.(type) {
 	case float64:
@@ -73,15 +95,15 @@ func (a *AnomalyPayload) SetTimestamp(v any) error {
 			a.Timestamp = 0
 			return nil
 		}
-		// Try parsing as Unix timestamp first.
+		// Try parsing as RFC3339 first.
+		if tm, err := time.Parse(time.RFC3339, val); err == nil {
+			a.Timestamp = tm.Unix()
+			return nil
+		}
+		// Fallback: try parsing as Unix timestamp string.
 		var t int64
 		if _, err := fmt.Sscanf(val, "%d", &t); err == nil {
 			a.Timestamp = t
-			return nil
-		}
-		// Fallback: try parsing as time.RFC3339.
-		if tm, err := time.Parse(time.RFC3339, val); err == nil {
-			a.Timestamp = tm.Unix()
 			return nil
 		}
 		return fmt.Errorf("cannot parse timestamp: %s", val)
@@ -93,15 +115,23 @@ func (a *AnomalyPayload) SetTimestamp(v any) error {
 	}
 }
 
+// UnmarshalJSON распарсивает JSON от analyzer.
+// Поддерживает flexible types для всех полей (string/float/int) и
+// корректно обрабатывает timestamp в любом формате (RFC3339, Unix, float).
+// После парсинга вызывает SetTimestamp для统一 обработки timestamp.
 func (a *AnomalyPayload) UnmarshalJSON(data []byte) error {
 	type rawPayload struct {
-		Rule      any `json:"rule"`
-		Service   any `json:"service"`
-		Metric    any `json:"metric"`
-		Value     any `json:"value"`
-		Severity  any `json:"severity"`
-		Message   any `json:"message"`
-		Timestamp any `json:"timestamp"`
+		Rule          any `json:"rule"`
+		Service       any `json:"service"`
+		Metric        any `json:"metric"`
+		Value         any `json:"value"`
+		Severity      any `json:"severity"`
+		Message       any `json:"message"`
+		Timestamp     any `json:"timestamp"`
+		Forecast      any `json:"forecast"`
+		ExpectedValue any `json:"expected_value"`
+		LowerCI       any `json:"lower_ci"`
+		UpperCI       any `json:"upper_ci"`
 	}
 
 	var r rawPayload
@@ -115,6 +145,10 @@ func (a *AnomalyPayload) UnmarshalJSON(data []byte) error {
 	a.Value = toFloat(r.Value)
 	a.Severity = toString(r.Severity)
 	a.Message = toString(r.Message)
+	a.Forecast = toFloat(r.Forecast)
+	a.ExpectedValue = toFloat(r.ExpectedValue)
+	a.LowerCI = toFloat(r.LowerCI)
+	a.UpperCI = toFloat(r.UpperCI)
 	return a.SetTimestamp(r.Timestamp)
 }
 
@@ -155,7 +189,9 @@ type IncidentWithDetails struct {
 	Comments []IncidentComment `json:"comments"`
 }
 
-// DedupKey returns the deduplication key for an incident.
+// DedupKey возвращает ключ дедупликации для инцидента.
+// Инциденты дедуплицируются по rule+service+metric — это позволяет
+// не создавать новый инцидент если по тому же правилу уже есть открытый.
 func (a *AnomalyPayload) DedupKey() string {
 	return a.Rule + "|" + a.Service + "|" + a.Metric
 }

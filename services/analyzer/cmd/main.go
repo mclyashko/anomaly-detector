@@ -11,8 +11,9 @@ import (
 
 	"github.com/mclyashko/anomaly-detector/services/analyzer/config"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/broker"
+	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/http"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/lua"
-	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/storage"
+	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/ml"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/storage/postgres"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/yaml"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/core"
@@ -33,40 +34,20 @@ func main() {
 	luaExecutor := lua.New(logger)
 	defer luaExecutor.Close()
 
-	// --- Model Registry Setup ---
-	var registry *core.ModelRegistry
-	modelCfgs, err := yaml.LoadModelsConfig(cfg.ModelsConfigFile)
-	if err != nil {
-		logger.Error("failed to load models config", "path", cfg.ModelsConfigFile, "err", err)
-		os.Exit(1)
-	}
-	if len(modelCfgs) > 0 {
-		minioStorage, err := storage.NewMinIOStorage(
-			cfg.MinIOEndpoint,
-			cfg.MinIOAccessKey,
-			cfg.MinIOSecretKey,
-			cfg.MinIOBucket,
-			cfg.MinIOUseSSL,
-		)
-		if err != nil {
-			logger.Error("failed to create MinIO storage", "err", err)
-			os.Exit(1)
-		}
-		registry = core.NewModelRegistry(minioStorage, modelCfgs, logger)
-		// Initial load.
-		if err := registry.LoadAll(context.Background()); err != nil {
-			logger.Warn("failed to load initial models", "err", err)
-		} else {
-			logger.Info("models loaded", "count", registry.ModelCount())
-		}
-		// Start background refresher.
-		go registry.StartCron(context.Background(), cfg.ModelRefreshInterval)
+	// --- ML Service Client Setup ---
+	var mlClient *ml.Client
+	if cfg.MLServiceURL != "" {
+		mlClient = ml.NewClient(ml.Config{
+			URL:     cfg.MLServiceURL,
+			Timeout: 10 * time.Second,
+		})
+		logger.Info("ML service client configured", "url", cfg.MLServiceURL)
 	} else {
-		logger.Info("no models configured — ML rules disabled")
+		logger.Info("ML_SERVICE_URL not set — ML rules will be disabled")
 	}
 
 	// Load and compile rules from YAML.
-	rules, err := yaml.CompileRules(cfg.RulesFile, luaExecutor, registry)
+	rules, err := yaml.CompileRules(cfg.RulesFile, luaExecutor, mlClient)
 	if err != nil {
 		logger.Error("failed to load rules", "rules_file", cfg.RulesFile, "err", err)
 		os.Exit(1)
@@ -94,23 +75,21 @@ func main() {
 	defer producer.Close()
 
 	// Create the analyzer service with polling.
+	ruleEngine := core.NewRuleEngine(rules, logger)
 	svc := core.NewAnalyzerService(
 		reader,
-		core.NewRuleEngine(rules, logger, registry),
+		ruleEngine,
 		producer,
 		cfg.AnalyzerID,
 		cfg.BatchSize,
 		logger,
 	)
 
-	// Simple HTTP server for healthz.
-	mux := stdlibhttp.NewServeMux()
-	mux.HandleFunc("/healthz", func(w stdlibhttp.ResponseWriter, _ *stdlibhttp.Request) {
-		w.WriteHeader(stdlibhttp.StatusOK)
-	})
+	// HTTP handler with ML rules endpoint for training service.
+	httpHandler := http.New(svc, ruleEngine, logger)
 	httpServer := &stdlibhttp.Server{
 		Addr:         ":" + cfg.HTTPPort,
-		Handler:      mux,
+		Handler:      httpHandler.Routes(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,
@@ -138,9 +117,6 @@ func main() {
 	shutdownCtx, shutdownStop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownStop()
 
-	if registry != nil {
-		registry.Close()
-	}
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "err", err)
 	}

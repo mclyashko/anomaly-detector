@@ -14,6 +14,8 @@ type Config struct {
 	KafkaBrokers  string
 }
 
+// Load читает переменные окружения и возвращает конфигурацию notifier-сервиса.
+// PostgreSQL DSN для хранения инцидентов, Kafka brokers для потребления аномалий.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 

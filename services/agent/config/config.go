@@ -21,6 +21,9 @@ type Config struct {
 	LogLevel              string
 }
 
+// Load читает переменные окружения и возвращает конфигурацию agent-сервиса.
+// Agent может отправлять метрики либо через Kafka (EnableKafka=true), либо напрямую
+// в ingestion сервис по HTTP (EnableKafka=false).
 func Load() (Config, error) {
 	_ = godotenv.Load()
 

@@ -23,6 +23,9 @@ type Config struct {
 	LogLevel    string
 }
 
+// Load читает переменные окружения и возвращает конфигурацию ingestion-сервиса.
+// Поддерживает два режима: memory (для разработки) и postgres (для прода).
+// Также настраивает Kafka consumer если ENABLE_BROKER=true.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 

@@ -1,10 +1,13 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/ml"
 )
 
 // LuaExecutor executes Lua scripts for rule evaluation.
@@ -28,9 +31,16 @@ type RuleConfig struct {
 	Metric    string   `yaml:"metric"`
 	AgentID   string   `yaml:"agent_id"` // Scope rule to specific agent; empty = all agents
 	Type      RuleType `yaml:"type"`
+	Enabled   bool     `yaml:"enabled"`   // required — true/false, no omitempty
 	Condition string   `yaml:"condition"` // e.g. "value > 0.8" for threshold
 	Script    string   `yaml:"script"`    // e.g. "./rules/cpu_rule.lua" for lua
 	Severity  Severity `yaml:"severity"`
+	// ML training params (required for ml type rules)
+	TrainIntervalMin  int    `yaml:"train_interval_min"`   // minutes between retraining
+	TrainDataWindow   int    `yaml:"train_data_window"`   // how many points to fetch for training
+	SeasonalityPeriod int    `yaml:"seasonality_period"`  // data points per seasonal cycle
+	Order             []int  `yaml:"order"`               // ARIMA order [p,d,q]
+	SeasonalOrder     []int  `yaml:"seasonal_order"`      // SARIMA seasonal order [P,D,Q,S]
 }
 
 // Rule is the core interface that every rule type implements.
@@ -59,6 +69,9 @@ func NewThresholdRule(cfg RuleConfig) (*ThresholdRule, error) {
 func (r *ThresholdRule) Name() string   { return r.cfg.Name }
 func (r *ThresholdRule) Metric() string { return r.cfg.Metric }
 
+// Evaluate проверяет метрику против порогового условия.
+// Возвращает Anomaly если value удовлетворяет условию (например value > 0.8).
+// nil если метрика не подходит по имени или AgentID.
 func (r *ThresholdRule) Evaluate(m Metric) *Anomaly {
 	if m.Name != r.cfg.Metric {
 		return nil
@@ -100,6 +113,9 @@ func NewLuaRule(cfg RuleConfig, executor LuaExecutor) (*LuaRule, error) {
 func (r *LuaRule) Name() string   { return r.cfg.Name }
 func (r *LuaRule) Metric() string { return r.cfg.Metric }
 
+// Evaluate выполняет Lua скрипт для проверки метрики.
+// Скрипт получает таблицу с данными метрики и возвращает triggered=true/false
+// и текстовое сообщение. Возвращает nil если AgentID не совпадает.
 func (r *LuaRule) Evaluate(m Metric) *Anomaly {
 	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
 		return nil
@@ -126,22 +142,40 @@ func (r *LuaRule) Evaluate(m Metric) *Anomaly {
 	}
 }
 
-// MLRule evaluates metrics using an ONNX ML model loaded from MinIO.
+// MLRule evaluates metrics by calling the Python ML Training Service via HTTP.
 type MLRule struct {
-	cfg      RuleConfig
-	registry *ModelRegistry
+	cfg       RuleConfig
+	client    *ml.Client
+	modelID   string
+	windowBuf []float64
+	windowMu  int // protected by windowBuf
 }
 
-func NewMLRule(cfg RuleConfig, registry *ModelRegistry) *MLRule {
-	return &MLRule{cfg: cfg, registry: registry}
+// NewMLRule creates a new ML rule that calls the ML service HTTP API.
+func NewMLRule(cfg RuleConfig, client *ml.Client) *MLRule {
+	// Build model_id from agent_id and metric_name (matches training service convention)
+	agentID := cfg.AgentID
+	metricName := cfg.Metric
+	if agentID == "" {
+		agentID = "*"
+	}
+	modelID := agentID + "__" + strings.ReplaceAll(strings.ReplaceAll(metricName, ".", "_"), "/", "_")
+
+	return &MLRule{
+		cfg:     cfg,
+		client:  client,
+		modelID: modelID,
+	}
 }
 
 func (r *MLRule) Name() string   { return r.cfg.Name }
 func (r *MLRule) Metric() string { return r.cfg.Metric }
 
-// Evaluate runs ML inference for the given metric.
-// It retrieves the recent history window from the model's sliding buffer,
-// runs the forecast, and fires an anomaly if the value falls outside the confidence interval.
+// Evaluate отправляет метрику в Python ML Training Service для проверки на аномальность.
+// Использует sliding window: накапливает последние seasonality_period+1 значений
+// и отправляет их вместе с текущим значением в ML сервис.
+// ML сервис возвращает forecast и доверительный интервал — если значение за пределами CI, это аномалия.
+// Возвращает nil если ML сервис недоступен или окно ещё не накопилось.
 func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	if r.cfg.Metric != "" && m.Name != r.cfg.Metric {
 		return nil
@@ -149,53 +183,86 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
 		return nil
 	}
-	model, ok := r.registry.Get(m.AgentID, m.Name)
-	if !ok {
+
+	// Контекст не передаётся от caller-а: в polling loop нет отмены,
+	// а evaluate вызывается синхронно с коротким HTTP timeout на стороне ML client.
+	ctx := context.Background()
+
+	// windowSize = seasonality_period + 1: чтобы вычислить сезонную коррекцию
+	// нам нужно значение S периодов назад, поэтому храним S+1 последних значений.
+	// При seasonality_period=60 храним 61 значение.
+	windowSize := r.cfg.SeasonalityPeriod + 1
+
+	// Sliding window: добавляем текущее значение, удаляем самое старое если превысили размер.
+	// Это обеспечивает накопление истории без роста памяти.
+	r.windowBuf = append(r.windowBuf, m.Value)
+	if len(r.windowBuf) > windowSize {
+		r.windowBuf = r.windowBuf[len(r.windowBuf)-windowSize:]
+	}
+
+	// ML-модели нужно как минимум windowSize значений для корректного прогноза.
+	// При недостатке истории возвращаем nil — правило "молчит".
+	if len(r.windowBuf) < windowSize {
 		return nil
 	}
 
-	history := model.GetHistory(m.AgentID, m.Name)
-	windowSize := model.Config.WindowSize
-	if windowSize == 0 {
-		windowSize = DefaultWindowSize
+	// Build history as a fresh slice (most recent last)
+	history := make([]float64, len(r.windowBuf))
+	copy(history, r.windowBuf)
+
+	// DEBUG: log Evaluate call
+	fmt.Printf("[MLRule Evaluate] metric=%s value=%.4f history_len=%d window_buf_len=%d\n",
+		m.Name, m.Value, len(history), len(r.windowBuf))
+
+	if r.client == nil {
+		return nil
 	}
-	if len(history) < windowSize {
+	result, err := r.client.Evaluate(ctx, r.modelID, history, m.Value)
+	if err != nil {
+		// ML service unavailable — skip silently
 		return nil
 	}
 
-	triggered, msg := model.DetectAnomaly(m.Value, history)
-	if !triggered {
+	fmt.Printf("[MLRule Evaluate] client.Evaluate result=anomaly=%v forecast=%.4f ci=[%.4f,%.4f] err=%v\n",
+		result.Anomaly, result.Forecast, result.LowerCI, result.UpperCI, err)
+
+	if result == nil || !result.Anomaly {
 		return nil
 	}
+
 	return &Anomaly{
-		ID:        m.ID,
-		Rule:      r.cfg.Name,
-		Metric:    m.Name,
-		MetricID:  m.ID,
-		Value:     m.Value,
-		Condition: "ml_anomaly",
-		Severity:  r.cfg.Severity,
-		Timestamp: m.Timestamp,
-		Message:   msg,
-		AgentID:   m.AgentID,
-		Service:   m.AgentID,
+		ID:           m.ID,
+		Rule:         r.cfg.Name,
+		Metric:       m.Name,
+		MetricID:     m.ID,
+		Value:        m.Value,
+		Condition:    "ml_anomaly",
+		Severity:     r.cfg.Severity,
+		Timestamp:    m.Timestamp,
+		Message:      result.Message,
+		AgentID:      m.AgentID,
+		Service:      m.AgentID,
+		Forecast:     result.Forecast,
+		ExpectedValue: result.Forecast,
+		LowerCI:      result.LowerCI,
+		UpperCI:      result.UpperCI,
 	}
 }
 
 // RuleFactory creates a Rule from a RuleConfig.
-// The executor is required for Lua rules. The registry is required for ML rules.
-// Returns an error for unknown rule types or if ML rule has no registry.
-func RuleFactory(cfg RuleConfig, executor LuaExecutor, registry *ModelRegistry) (Rule, error) {
+// The executor is required for Lua rules. The mlClient is required for ML rules.
+// Returns an error for unknown rule types or if ML rule has no client.
+func RuleFactory(cfg RuleConfig, executor LuaExecutor, mlClient *ml.Client) (Rule, error) {
 	switch cfg.Type {
 	case RuleTypeThreshold:
 		return NewThresholdRule(cfg)
 	case RuleTypeLua:
 		return NewLuaRule(cfg, executor)
 	case RuleTypeML:
-		if registry == nil {
-			return nil, errors.New("ML rule requires a model registry")
+		if mlClient == nil {
+			return nil, errors.New("ML rule requires an ML service client")
 		}
-		return NewMLRule(cfg, registry), nil
+		return NewMLRule(cfg, mlClient), nil
 	default:
 		return nil, fmt.Errorf("unknown rule type %q for rule %q", cfg.Type, cfg.Name)
 	}

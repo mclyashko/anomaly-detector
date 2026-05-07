@@ -128,7 +128,9 @@ class MinIOStorageClient:
         versions: list[int] = []
         for obj in objects:
             # obj.object_name is like "agent-1__http_latency__sarima__v3/model.onnx"
-            basename = obj.object_name.split("/")[0]  # folder part
+            basename = obj.object_name.split("/")[0]  # folder part: "agent-1__http_latency__sarima__v3"
+            # Regex extracts version number from folder name: "__v" followed by digits at end of string.
+            # E.g. "agent-1__http_latency__sarima__v3" -> version 3.
             m = re.search(r"__v(\d+)$", basename)
             if m:
                 versions.append(int(m.group(1)))

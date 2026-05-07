@@ -25,12 +25,21 @@ func (m *mockAnalyzer) ProcessBatch(_ context.Context, batch core.Batch) {
 	m.batches = append(m.batches, batch)
 }
 
+type mockMLRulesProvider struct {
+	rules []core.MLRuleInfo
+}
+
+func (p *mockMLRulesProvider) GetMLRules() []core.MLRuleInfo {
+	return p.rules
+}
+
 // --- helpers ---
 
 func newHandler() (*httphandler.Handler, *mockAnalyzer) {
 	analyzer := &mockAnalyzer{}
+	mlRules := &mockMLRulesProvider{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return httphandler.New(analyzer, logger), analyzer
+	return httphandler.New(analyzer, mlRules, logger), analyzer
 }
 
 func postJSON(handler http.Handler, path string, body []byte) *httptest.ResponseRecorder {
@@ -107,5 +116,30 @@ func TestHealthz_Returns200(t *testing.T) {
 	h.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestMLRules_ReturnsRules(t *testing.T) {
+	mlRules := &mockMLRulesProvider{
+		rules: []core.MLRuleInfo{
+			{AgentID: "agent-1", Metric: "cpu", TrainIntervalMin: 30, TrainDataWindow: 500, SeasonalityPeriod: 60, Order: []int{1, 0, 1}, SeasonalOrder: []int{1, 1, 1, 60}},
+		},
+	}
+	handler := httphandler.New(&mockAnalyzer{}, mlRules, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ml-rules", nil)
+	w := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	var rules []core.MLRuleInfo
+	if err := json.NewDecoder(w.Body).Decode(&rules); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Errorf("got %d rules, want 1", len(rules))
+	}
+	if rules[0].AgentID != "agent-1" {
+		t.Errorf("agent_id = %q, want agent-1", rules[0].AgentID)
 	}
 }

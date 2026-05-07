@@ -17,6 +17,9 @@ type AgentService struct {
 	logger     *slog.Logger
 }
 
+// NewAgentService создаёт AgentService — сервис который периодически собирает метрики
+// от всех коллекторов и отправляет батчами в ingestion (через Kafka или HTTP).
+// agentID уникально идентифицирует этот инстанс.
 func NewAgentService(
 	agentID string,
 	interval time.Duration,

@@ -113,6 +113,12 @@ def train_sarima(
         aicc = float(fit.aicc)
 
     # Extract key parameters for ONNX export.
+    # statsmodels SARIMAX именует параметры специфичным образом:
+    #   ar.L1 — AR(1) коэффициент (Lag 1)
+    #   ma.L1 — MA(1) коэффициент (Lag 1)
+    #   ar.S.L{s} — Seasonal AR коэффициент (Lag s, например ar.S.L24 для hourly данных)
+    #   ma.S.L{s} — Seasonal MA коэффициент
+    # Не все параметры присутствуют в модели если сезонность мала — поэтому fallback в 0.0.
     params = {
         "order": order,
         "seasonal_order": seasonal_order,

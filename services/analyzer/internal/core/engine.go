@@ -16,9 +16,8 @@ const (
 // RuleEngine evaluates metrics against registered rules.
 // It is safe for concurrent use.
 type RuleEngine struct {
-	rules    []Rule
-	logger   *slog.Logger
-	registry *ModelRegistry // optional; used to update ML model history after evaluation
+	rules  []Rule
+	logger *slog.Logger
 
 	// index maps metric name → rule indices for threshold and lua rules.
 	index map[string][]int
@@ -30,9 +29,8 @@ type RuleEngine struct {
 
 // NewRuleEngine creates an engine with the given rules and builds the metric index.
 // ML rules are indexed by "agentID:metricName" for proper scoping.
-// The optional registry is used to update ML model history after each evaluation.
-func NewRuleEngine(rules []Rule, logger *slog.Logger, registry *ModelRegistry) *RuleEngine {
-	e := &RuleEngine{rules: rules, logger: logger, registry: registry}
+func NewRuleEngine(rules []Rule, logger *slog.Logger) *RuleEngine {
+	e := &RuleEngine{rules: rules, logger: logger}
 
 	e.index = make(map[string][]int)
 	e.mlIndex = make(map[string][]int)
@@ -105,19 +103,26 @@ func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
 	return anomalies
 }
 
-// UpdateHistory updates the ML model sliding windows with the latest metric values.
-// This is called after EvaluateBatch to ensure history is fresh for the next poll cycle.
-func (e *RuleEngine) UpdateHistory(metrics []Metric) {
-	if e.registry == nil {
-		return
-	}
-	for _, m := range metrics {
-		model, ok := e.registry.Get(m.AgentID, m.Name)
-		if !ok {
+// GetMLRules returns training configuration for all ML rules.
+func (e *RuleEngine) GetMLRules() []MLRuleInfo {
+	var result []MLRuleInfo
+	for i, rule := range e.rules {
+		cfg := extractRuleConfig(rule)
+		if cfg == nil || cfg.Type != RuleTypeML {
 			continue
 		}
-		model.AddHistory(m.AgentID, m.Name, m.Value)
+		result = append(result, MLRuleInfo{
+			AgentID:           cfg.AgentID,
+			Metric:            cfg.Metric,
+			TrainIntervalMin:  cfg.TrainIntervalMin,
+			TrainDataWindow:   cfg.TrainDataWindow,
+			SeasonalityPeriod: cfg.SeasonalityPeriod,
+			Order:             cfg.Order,
+			SeasonalOrder:     cfg.SeasonalOrder,
+		})
+		_ = i // rule index not needed in output
 	}
+	return result
 }
 
 // EvaluateBatch evaluates all rules against all metrics in the batch.
@@ -140,6 +145,9 @@ func (e *RuleEngine) EvaluateBatch(batch Batch) []*Anomaly {
 		}
 	} else {
 		// Parallel — amortize evaluation across goroutines for high throughput.
+		// Каждый горутин вычисляет аномалии для своего чанка, кладёт в локальный слайс.
+		// mutex.Lock/unlock нужен только при мерже локального результата в общий — это
+		// единственная точка, где результаты из горутин попадают в result.
 		var wg sync.WaitGroup
 		mu := sync.Mutex{}
 

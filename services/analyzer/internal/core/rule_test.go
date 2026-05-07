@@ -136,19 +136,17 @@ func TestRuleFactory_UnknownType(t *testing.T) {
 // --- MLRule ---
 
 func TestMLRule_NoModel(t *testing.T) {
-	// Registry has no models loaded — MLRule should return nil silently.
+	// MLRule calls the ML service via HTTP. When the client is nil, it silently returns nil.
 	cfg := core.RuleConfig{
 		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
 		AgentID: "agent-1", Severity: core.SeverityWarning,
 	}
-	ms := &mockStorage{}
-	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
-	mlRule := core.NewMLRule(cfg, registry)
+	// nil client → cannot call ML service → Evaluate returns nil
+	mlRule := core.NewMLRule(cfg, nil)
 
-	// No model for agent-1:cpu → nil
 	anomaly := mlRule.Evaluate(metric("cpu", 100.0, "agent-1"))
 	if anomaly != nil {
-		t.Error("expected nil when no model is loaded")
+		t.Error("expected nil when ml client is nil")
 	}
 }
 
@@ -157,9 +155,7 @@ func TestMLRule_WrongAgent(t *testing.T) {
 		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
 		AgentID: "agent-1", Severity: core.SeverityWarning,
 	}
-	ms := &mockStorage{}
-	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
-	mlRule := core.NewMLRule(cfg, registry)
+	mlRule := core.NewMLRule(cfg, nil)
 
 	// Metric for agent-2, rule scoped to agent-1 → nil
 	anomaly := mlRule.Evaluate(metric("cpu", 100.0, "agent-2"))
@@ -173,9 +169,7 @@ func TestMLRule_WrongMetric(t *testing.T) {
 		Name: "ml-rule", Metric: "cpu", Type: core.RuleTypeML,
 		AgentID: "agent-1", Severity: core.SeverityWarning,
 	}
-	ms := &mockStorage{}
-	registry := core.NewModelRegistry(ms, []core.ModelConfig{}, discardLogger())
-	mlRule := core.NewMLRule(cfg, registry)
+	mlRule := core.NewMLRule(cfg, nil)
 
 	anomaly := mlRule.Evaluate(metric("memory", 100.0, "agent-1"))
 	if anomaly != nil {

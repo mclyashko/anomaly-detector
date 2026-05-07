@@ -1,0 +1,25 @@
+{
+  "model_id": "test-agent__cpu",
+  "agent_id": "test-agent",
+  "metric_name": "cpu",
+  "ar_params": -0.5081220869673425,
+  "ma_params": 0.5457854770640259,
+  "seasonal_ar_params": -0.4852721780730511,
+  "seasonal_ma_params": -0.4101973095366411,
+  "residual_std": 19.756949358349164,
+  "confidence_level": 0.95,
+  "seasonality_period": 24,
+  "window_size": 48,
+  "order": [
+    1,
+    0,
+    1
+  ],
+  "seasonal_order": [
+    1,
+    1,
+    1,
+    24
+  ],
+  "trained_at": "2026-05-07T18:57:40.189514+00:00"
+}

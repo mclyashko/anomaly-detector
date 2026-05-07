@@ -64,6 +64,31 @@ func (s *AnalyzerService) Run(ctx context.Context, pollInterval time.Duration) {
 	}
 }
 
+// ProcessBatch implements BatchHandler for HTTP ingestion path.
+func (s *AnalyzerService) ProcessBatch(ctx context.Context, batch Batch) {
+	if len(batch.Metrics) == 0 {
+		return
+	}
+	// Evaluate batch and publish anomalies immediately (async HTTP path).
+	anomalies := s.engine.EvaluateBatch(batch)
+	if len(anomalies) == 0 {
+		return
+	}
+	// Mark anomalous metrics as analyzed.
+	var anomalyIDs []int64
+	for _, a := range anomalies {
+		anomalyIDs = append(anomalyIDs, a.MetricID)
+	}
+	if err := s.producer.Produce(ctx, anomalies); err != nil {
+		s.logger.Error("failed to publish anomalies via HTTP path", "err", err, "count", len(anomalies))
+		return
+	}
+	s.logger.Info("anomalies published via HTTP", "anomaly_count", len(anomalies))
+	if _, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, anomalyIDs); err != nil {
+		s.logger.Warn("failed to mark anomalous metrics via HTTP", "err", err)
+	}
+}
+
 // processMetrics fetches unanalyzed metrics, evaluates them in batch, and
 // publishes anomalies to Kafka. Anomalous metrics are marked only after successful publish.
 func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
@@ -82,9 +107,6 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 	batch := Batch{Metrics: metrics}
 	anomalies := s.engine.EvaluateBatch(batch)
 
-	// Update ML model history with these metrics for the next poll cycle.
-	s.engine.UpdateHistory(metrics)
-
 	// Build metricID → anomaly lookup directly from MetricID field.
 	anomalyMetricIDs := make(map[int64]bool, len(anomalies))
 	for _, a := range anomalies {
@@ -100,6 +122,13 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 			normalIDs = append(normalIDs, m.ID)
 		}
 	}
+
+	s.logger.Info("metrics processed",
+		"total", len(metrics),
+		"anomalies", len(anomalies),
+		"to_notify", len(notifyIDs),
+		"to_mark_normal", len(normalIDs),
+	)
 
 	// Mark normal metrics as analyzed. Stop on any error — metrics must not be lost.
 	if len(normalIDs) > 0 {

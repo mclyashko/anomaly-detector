@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+
 COPY services/training/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -10,4 +12,12 @@ COPY services/training/ .
 # Set Python path so 'training' package is importable.
 ENV PYTHONPATH=/app
 
-CMD ["python", "cmd/main.py"]
+# Set models directory
+ENV MODELS_DIR=/app/models
+ENV PORT=8085
+
+# Create models directory
+RUN mkdir -p /app/models
+
+# Mode: "api" runs FastAPI server, otherwise runs cmd/main.py
+CMD ["sh", "-c", "if [ \"$SERVICE_MODE\" = \"api\" ]; then uvicorn app:app --host 0.0.0.0 --port $PORT; else python cmd/main.py \"$@\"; fi"]
