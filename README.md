@@ -221,7 +221,7 @@ POST /api/v1/evaluate
 
 ## Правила (analyzer)
 
-Правила в `rules.yaml`. Типы: `threshold`, `lua`, `ml`. Severity: `critical`, `warning`, `info`.
+Правила в `rules.yaml`. Типы: `threshold`, `lua`, `ml`, `ks`. Severity: `critical`, `warning`, `info`.
 
 ### threshold
 
@@ -258,6 +258,22 @@ SARIMA через HTTP. `agent_id` обязателен — модель шлё�
   seasonality_period: 60
   order: [1, 0, 1]
   seasonal_order: [1, 1, 1, 60]
+```
+
+### ks
+
+Двухвыборочный тест Колмогорова-Смирнова. Сравнивает последние `min_window_size` значений с предшествующими `reference_window` значениями. Если p-value < significance_level — аномалия. Полностью на Go, без внешнего сервиса.
+
+```yaml
+- name: test_signal_ks
+  enabled: false
+  agent_id: agent-1
+  metric: test_signal
+  type: ks
+  severity: critical
+  reference_window: 60
+  min_window_size: 30
+  significance_level: 0.05
 ```
 
 ### Пример rules.yaml

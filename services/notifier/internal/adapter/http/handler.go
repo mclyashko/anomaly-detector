@@ -177,6 +177,7 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 			payload := &core.AnomalyPayload{
 				Rule:     a.Rule,
 				Service:  a.AgentID,
+				AgentID:  a.AgentID,
 				Metric:   a.Metric,
 				Value:    a.Value,
 				Severity: a.Severity,

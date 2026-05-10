@@ -74,7 +74,7 @@ type AnomalyPayload struct {
 	Severity      string  `json:"severity"`
 	Message       string  `json:"message"`
 	Timestamp     int64   `json:"timestamp"` // Unix timestamp in seconds
-	AgentID       string  `json:"agent_id,omitempty"`
+	AgentID       string  `json:"agent_id"`
 	Condition     string  `json:"condition,omitempty"`
 	ID            int64   `json:"id,omitempty"`
 	Forecast      float64 `json:"forecast,omitempty"`

@@ -100,6 +100,7 @@ func (r ingestRequest) toDomainWithTSCheck() (core.Batch, int) {
 			Labels:    m.Labels,
 			Timestamp: ts,
 			Type:      m.Type,
+			AgentID:   r.AgentID,
 		}
 	}
 	return core.Batch{

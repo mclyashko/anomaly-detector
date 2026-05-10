@@ -19,21 +19,18 @@ type RuleEngine struct {
 	rules  []Rule
 	logger *slog.Logger
 
-	// index maps metric name → rule indices for threshold and lua rules.
+	// index maps "agentID:metricName" → rule indices.
+	// agentID may be "*" for rules with empty AgentID (wildcard — matches any agent).
 	index map[string][]int
-
-	// mlIndex maps "agentID:metricName" → rule indices for ML rules.
-	// ML rules are indexed separately because they require agentID scoping.
-	mlIndex map[string][]int
 }
 
 // NewRuleEngine creates an engine with the given rules and builds the metric index.
-// ML rules are indexed by "agentID:metricName" for proper scoping.
+// All rules are indexed by "agentID:metricName" for consistent per-agent matching.
+// An empty AgentID in the config is stored as "*" (wildcard — matches any agent).
 func NewRuleEngine(rules []Rule, logger *slog.Logger) *RuleEngine {
 	e := &RuleEngine{rules: rules, logger: logger}
 
 	e.index = make(map[string][]int)
-	e.mlIndex = make(map[string][]int)
 	for i, rule := range rules {
 		cfg := extractRuleConfig(rule)
 		if cfg == nil {
@@ -41,15 +38,13 @@ func NewRuleEngine(rules []Rule, logger *slog.Logger) *RuleEngine {
 			e.index[rule.Metric()] = append(e.index[rule.Metric()], i)
 			continue
 		}
-		switch cfg.Type {
-		case RuleTypeML:
-			// ML rules are indexed by agentID:metricName.
-			key := cfg.AgentID + ":" + cfg.Metric
-			e.mlIndex[key] = append(e.mlIndex[key], i)
-		default:
-			// Threshold and Lua rules indexed by metric name.
-			e.index[rule.Metric()] = append(e.index[rule.Metric()], i)
+		// Normalize empty AgentID to "*" for consistent indexing.
+		agentID := cfg.AgentID
+		if agentID == "" {
+			agentID = "*"
 		}
+		key := agentID + ":" + cfg.Metric
+		e.index[key] = append(e.index[key], i)
 	}
 
 	return e
@@ -64,19 +59,26 @@ func extractRuleConfig(rule Rule) *RuleConfig {
 		return &r.cfg
 	case *MLRule:
 		return &r.cfg
+	case *KSRule:
+		return &r.cfg
 	default:
 		return nil
 	}
 }
 
 // Evaluate evaluates all rules that match the given metric.
-// Threshold and Lua rules are matched by metric name.
-// ML rules are matched by agentID:metricName.
+// Rules are matched by agentID:metricName. If no exact match exists,
+// a wildcard rule (AgentID="*") is tried as fallback.
 func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
 	var anomalies []*Anomaly
 
-	// Threshold/Lua rules: O(1) lookup by metric name.
-	if indices, ok := e.index[m.Name]; ok {
+	agentID := m.AgentID
+	if agentID == "" {
+		agentID = "*"
+	}
+
+	// Try exact agentID:metricName match first.
+	if indices, ok := e.index[agentID+":"+m.Name]; ok {
 		for _, idx := range indices {
 			a := e.rules[idx].Evaluate(m)
 			if a == nil {
@@ -87,16 +89,17 @@ func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
 		}
 	}
 
-	// ML rules: lookup by agentID:metricName.
-	mlKey := m.AgentID + ":" + m.Name
-	if indices, ok := e.mlIndex[mlKey]; ok {
-		for _, idx := range indices {
-			a := e.rules[idx].Evaluate(m)
-			if a == nil {
-				continue
+	// Fallback: wildcard "*" rules match any agent (skip if already used).
+	if agentID != "*" {
+		if indices, ok := e.index["*:"+m.Name]; ok {
+			for _, idx := range indices {
+				a := e.rules[idx].Evaluate(m)
+				if a == nil {
+					continue
+				}
+				a.AgentID = m.AgentID
+				anomalies = append(anomalies, a)
 			}
-			a.AgentID = m.AgentID
-			anomalies = append(anomalies, a)
 		}
 	}
 

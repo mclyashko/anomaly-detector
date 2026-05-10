@@ -30,15 +30,23 @@ func NewKafkaSender(brokers []string, topic string, logger *slog.Logger) *KafkaS
 	return &KafkaSender{writer: w, logger: logger}
 }
 
-// Send encodes the batch as JSON and writes it to Kafka.
+// Send encodes the batch as JSON and writes to Kafka.
+// Partitioning uses agentID:metricName key — first metric in batch determines partition.
+// This ensures all metrics from one agent+metric combination go to the same partition.
 func (s *KafkaSender) Send(ctx context.Context, batch domain.Batch) error {
 	data, err := json.Marshal(batch)
 	if err != nil {
 		return err
 	}
 
+	// Use first metric's name for partitioning key — gives per-agent-per-metric ordering.
+	partitionKey := batch.AgentID
+	if len(batch.Metrics) > 0 {
+		partitionKey = batch.AgentID + ":" + batch.Metrics[0].Name
+	}
+
 	msg := kafkago.Message{
-		Key:   []byte(batch.AgentID),
+		Key:   []byte(partitionKey),
 		Value: data,
 	}
 

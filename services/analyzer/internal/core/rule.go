@@ -24,6 +24,7 @@ const (
 	RuleTypeThreshold RuleType = "threshold"
 	RuleTypeLua       RuleType = "lua"
 	RuleTypeML        RuleType = "ml"
+	RuleTypeKS        RuleType = "ks"
 )
 
 // RuleConfig is the parsed YAML representation of a single rule.
@@ -42,6 +43,10 @@ type RuleConfig struct {
 	SeasonalityPeriod int   `yaml:"seasonality_period"` // data points per seasonal cycle
 	Order             []int `yaml:"order"`              // ARIMA order [p,d,q]
 	SeasonalOrder     []int `yaml:"seasonal_order"`     // SARIMA seasonal order [P,D,Q,S]
+	// KS-test params (required for ks type rules)
+	ReferenceWindow   int     `yaml:"reference_window"`   // size of the reference window (previous N values)
+	SignificanceLevel float64 `yaml:"significance_level"` // p-value threshold; anomaly if p < this value
+	MinWindowSize     int     `yaml:"min_window_size"`    // minimum current window size to trigger evaluation
 }
 
 // Rule is the core interface that every rule type implements.
@@ -263,6 +268,90 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	}
 }
 
+// KSRule evaluates metrics using a two-sample Kolmogorov-Smirnov test.
+// It maintains a sliding buffer of size (reference_window + min_window_size).
+// Each Evaluate call:
+//   - appends the incoming value to the buffer
+//   - trims to max size
+//   - if buffer is full: splits into reference (older) and current (newer) windows
+//   - runs KS test; if p-value < significance_level → anomaly
+type KSRule struct {
+	cfg       RuleConfig
+	windowBuf []float64
+	maxSize   int
+}
+
+// NewKSRule creates a KS rule. ReferenceWindow and MinWindowSize must be > 0.
+func NewKSRule(cfg RuleConfig) *KSRule {
+	maxSize := cfg.ReferenceWindow + cfg.MinWindowSize
+	if maxSize <= 0 {
+		maxSize = 1 // avoid panic, Evaluate will return nil
+	}
+	return &KSRule{cfg: cfg, maxSize: maxSize}
+}
+
+func (r *KSRule) Name() string   { return r.cfg.Name }
+func (r *KSRule) Metric() string { return r.cfg.Metric }
+
+// Evaluate checks whether the current window distribution differs significantly
+// from the reference window using a two-sample Kolmogorov-Smirnov test.
+func (r *KSRule) Evaluate(m Metric) *Anomaly {
+	if r.cfg.Metric != "" && m.Name != r.cfg.Metric {
+		return nil
+	}
+	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
+		return nil
+	}
+
+	// Sliding window: append current value, trim to maxSize.
+	r.windowBuf = append(r.windowBuf, m.Value)
+	if len(r.windowBuf) > r.maxSize {
+		r.windowBuf = r.windowBuf[len(r.windowBuf)-r.maxSize:]
+	}
+
+	// Not enough data yet — need maxSize values before first evaluation.
+	if len(r.windowBuf) < r.maxSize {
+		return nil
+	}
+
+	// Split into non-overlapping adjacent windows:
+	//   [ oldest ... | reference (last ref_w) | current (last min_w) ]
+	refStart := len(r.windowBuf) - r.cfg.ReferenceWindow - r.cfg.MinWindowSize
+	ref := r.windowBuf[refStart : refStart+r.cfg.ReferenceWindow]
+	cur := r.windowBuf[refStart+r.cfg.ReferenceWindow:]
+
+	// KS test requires at least 2 elements in each window.
+	if len(ref) < 2 || len(cur) < 2 {
+		return nil
+	}
+
+	pValue := KsTest(ref, cur)
+
+	// Significance default: if not set (0), use 0.05.
+	sigLevel := r.cfg.SignificanceLevel
+	if sigLevel == 0 {
+		sigLevel = 0.05
+	}
+
+	if pValue >= sigLevel {
+		return nil
+	}
+
+	return &Anomaly{
+		ID:        m.ID,
+		Rule:      r.cfg.Name,
+		Metric:    m.Name,
+		MetricID:  m.ID,
+		Value:     m.Value,
+		Condition: fmt.Sprintf("ks_test p=%.4f < %.2f", pValue, sigLevel),
+		Severity:  r.cfg.Severity,
+		Timestamp: m.Timestamp,
+		Message:   fmt.Sprintf("KS-test p-value %.4f below significance %.2f", pValue, sigLevel),
+		AgentID:   m.AgentID,
+		Service:   m.AgentID,
+	}
+}
+
 // RuleFactory creates a Rule from a RuleConfig.
 // The executor is required for Lua rules. The mlEvaluator is required for ML rules.
 // Returns an error for unknown rule types or if ML rule has no evaluator.
@@ -277,6 +366,8 @@ func RuleFactory(cfg RuleConfig, executor LuaExecutor, mlEvaluator MLEvaluator) 
 			return nil, errors.New("ML rule requires an ML evaluator")
 		}
 		return NewMLRule(cfg, mlEvaluator), nil
+	case RuleTypeKS:
+		return NewKSRule(cfg), nil
 	default:
 		return nil, fmt.Errorf("unknown rule type %q for rule %q", cfg.Type, cfg.Name)
 	}

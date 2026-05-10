@@ -54,3 +54,13 @@ rules:
     seasonality_period: 60
     order: [1, 0, 1]
     seasonal_order: [1, 1, 1, 60]
+
+  - name: test_signal_ks
+    enabled: false
+    agent_id: agent-1
+    metric: test_signal
+    type: ks
+    severity: critical
+    reference_window: 60
+    min_window_size: 30
+    significance_level: 0.05

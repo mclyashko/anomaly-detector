@@ -51,7 +51,7 @@ func (p *Producer) Produce(ctx context.Context, anomalies []*core.Anomaly) error
 			return err
 		}
 		msgs = append(msgs, kafkago.Message{
-			Key:   []byte(a.Metric), // partition by metric name for ordering
+			Key:   []byte(a.AgentID + ":" + a.Metric), // partition by agentID:metric for per-agent ordering
 			Value: payload,
 		})
 	}

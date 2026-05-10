@@ -74,9 +74,9 @@ func TestRuleEngine_EvaluateBatch_MultipleAnomalies(t *testing.T) {
 	batch := core.Batch{
 		AgentID: "agent-1",
 		Metrics: []core.Metric{
-			{Name: "cpu", Value: 0.95, Timestamp: ts()},
-			{Name: "memory", Value: 0.99, Timestamp: ts()},
-			{Name: "cpu", Value: 0.3, Timestamp: ts()},
+			{Name: "cpu", Value: 0.95, Timestamp: ts(), AgentID: "agent-1"},
+			{Name: "memory", Value: 0.99, Timestamp: ts(), AgentID: "agent-1"},
+			{Name: "cpu", Value: 0.3, Timestamp: ts(), AgentID: "agent-1"},
 		},
 	}
 

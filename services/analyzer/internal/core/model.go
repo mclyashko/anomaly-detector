@@ -41,7 +41,7 @@ type Anomaly struct {
 	Condition     string    `json:"condition"`
 	Severity      Severity  `json:"severity"`
 	Timestamp     time.Time `json:"timestamp"`
-	AgentID       string    `json:"agent_id,omitempty"`
+	AgentID       string    `json:"agent_id"`
 	Message       string    `json:"message,omitempty"`
 	Service       string    `json:"service,omitempty"`
 	Forecast      float64   `json:"forecast,omitempty"`
