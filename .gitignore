@@ -17,11 +17,12 @@ go.work.sum
 
 # =============================================================================
 # ENV FILES & SECRETS
-# =============================================================================
-
-.env
-.env.local
-.env.*.local
+# By default, env files are excluded to avoid committing secrets.
+# Non-secret service configs (no real credentials) are explicitly tracked:
+!.env
+!.env.local
+!.env.*.local
+infra/env/*.env
 *.pem
 *.key
 *.crt
