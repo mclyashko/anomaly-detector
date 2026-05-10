@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/broker"
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/channels/log"
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/http"
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/storage/postgres"
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/ui"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/broker"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/channels/log"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/http"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/storage/postgres"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/ui"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/config"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/core"
 	"github.com/mclyashko/anomaly-detector/shared/pkg/buildlog"
@@ -50,7 +50,10 @@ func main() {
 	for i := range brokers {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
-	consumer := broker.NewConsumer(broker.ConsumerConfig{Brokers: brokers}, svc, logger)
+	consumer := broker.NewConsumer(broker.ConsumerConfig{
+		Brokers: brokers,
+		Topic:  cfg.KafkaAnomaliesTopic,
+	}, svc, logger)
 
 	// Create HTTP handlers.
 	uiHandler := ui.New(svc, logger)
@@ -74,8 +77,9 @@ func main() {
 	}()
 
 	// Start Kafka consumer in background.
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	go func() {
-		if err := consumer.Consume(context.Background()); err != nil {
+		if err := consumer.Consume(consumerCtx); err != nil {
 			logger.Error("kafka consumer error", "err", err)
 		}
 	}()
@@ -89,6 +93,7 @@ func main() {
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 
+	consumerCancel()
 	consumer.Stop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "err", err)

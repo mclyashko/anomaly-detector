@@ -15,24 +15,23 @@ import (
 )
 
 const (
-	anomaliesTopic  = "anomalies"
 	consumerGroup   = "notifier-group"
 	shutdownTimeout = 10 * time.Second
 )
 
-// Consumer читает аномальные события из Kafka топика "anomalies"
-// и передаёт их в NotifierService для создания/обновления инцидентов.
+// Consumer reads anomaly events from the Kafka topic "anomalies"
+// and forwards them to NotifierService for incident creation/update.
 //
-// Архитектура:
-// - Основной горутин читает сообщения из Kafka с помощью Reader API
-// - Каждое сообщение кладётся в буферизованный канал jobs (емкость = Capacity)
-// - Workers (параллельно) вычитывают из канала и обрабатывают каждое сообщение
-// - Коммит offset-а происходит только после успешной обработки HandleAnomaly
+// Architecture:
+// - Main goroutine reads messages from Kafka using the Reader API
+// - Each message is placed in a buffered channel jobs (capacity = Capacity)
+// - Workers (in parallel) read from the channel and process each message
+// - Offset commit happens only after successful HandleAnomaly processing
 //
-// Такая схема обеспечивает:
-// - Параллельную обработку нескольких сообщений (Workers goroutines)
-// - Backpressure через буферизованный канал
-// - At-least-once доставку: если обработка упала, сообщение не коммитится и будет переобработано
+// This design provides:
+// - Parallel processing of multiple messages (Workers goroutines)
+// - Backpressure via buffered channel
+// - At-least-once delivery: if processing fails, the message is not committed and will be reprocessed
 type Consumer struct {
 	cfg    ConsumerConfig
 	logger *slog.Logger
@@ -43,12 +42,17 @@ type Consumer struct {
 	wg     sync.WaitGroup
 	stopMu sync.Mutex
 	stopped bool
+
+	stopCtxFn   context.Context
+	stopCancel  context.CancelFunc
+	stopOnce    sync.Once
 }
 
 type ConsumerConfig struct {
 	Brokers  []string
-	Workers  int // parallel message handlers; default 8
-	Capacity int // bounded channel capacity (backpressure); default 256
+	Topic    string // Kafka topic for anomaly events
+	Workers  int    // parallel message handlers; default 8
+	Capacity int     // bounded channel capacity (backpressure); default 256
 }
 
 func (c ConsumerConfig) defaults() ConsumerConfig {
@@ -58,22 +62,25 @@ func (c ConsumerConfig) defaults() ConsumerConfig {
 	if c.Capacity <= 0 {
 		c.Capacity = 256
 	}
+	if c.Topic == "" {
+		c.Topic = "anomalies"
+	}
 	return c
 }
 
-func makeKafkaFetcher(brokers []string) *kafkago.Reader {
+func makeKafkaFetcher(brokers []string, topic string) *kafkago.Reader {
 	return kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  brokers,
-		Topic:    anomaliesTopic,
+		Topic:    topic,
 		GroupID:  consumerGroup,
 		MinBytes: 1024,
 		MaxBytes: 1048576,
 	})
 }
 
-// NewConsumer создаёт Consumer с заданной конфигурацией.
-// Broker-и address книги kafka, svc — NotifierService для обработки событий,
-// logger — для логирования. Возвращает готовый к запуску Consumer.
+// NewConsumer creates a Consumer with the given configuration.
+// brokers are kafka addresses, svc is NotifierService for event processing,
+// logger is for logging. Returns a Consumer ready to start.
 func NewConsumer(cfg ConsumerConfig, svc *core.NotifierService, logger *slog.Logger) *Consumer {
 	cfg = cfg.defaults()
 	return &Consumer{
@@ -92,17 +99,21 @@ type kafkaFetcher interface {
 }
 
 // Consume connects to Kafka and starts worker goroutines.
+// The supplied context is used for graceful shutdown: cancelling ctx terminates the consume loop.
 func (c *Consumer) Consume(ctx context.Context) error {
+	c.stopCtxFn, c.stopCancel = context.WithCancel(context.Background())
+	defer c.stopCancel()
+
 	c.logger.Info("kafka consumer starting",
 		"brokers", c.cfg.Brokers,
-		"topic",   anomaliesTopic,
+		"topic",   c.cfg.Topic,
 		"group",   consumerGroup,
 		"workers", c.cfg.Workers,
 	)
 
 	// Lazily create the Kafka reader so tests can inject a stub via .reader field.
 	if c.reader == nil {
-		c.reader = makeKafkaFetcher(c.cfg.Brokers)
+		c.reader = makeKafkaFetcher(c.cfg.Brokers, c.cfg.Topic)
 	}
 
 	// Launch workers.
@@ -147,11 +158,11 @@ func (c *Consumer) Consume(ctx context.Context) error {
 }
 
 func (c *Consumer) Stop() {
+	c.stopOnce.Do(func() {
+		c.stopCancel()
+	})
+
 	c.stopMu.Lock()
-	if c.stopped {
-		c.stopMu.Unlock()
-		return
-	}
 	c.stopped = true
 	c.stopMu.Unlock()
 
@@ -184,8 +195,8 @@ func (c *Consumer) worker() {
 	}
 }
 
-// process обрабатывает одно сообщение из Kafka.
-// Десериализует AnomalyPayload, передаёт в NotifierService, затем коммитит offset.
+// process processes a single message from Kafka.
+// Deserializes AnomalyPayload, passes it to NotifierService, then commits the offset.
 func (c *Consumer) process(msg kafkago.Message) {
 	var payload core.AnomalyPayload
 	if err := json.Unmarshal(msg.Value, &payload); err != nil {
@@ -198,7 +209,8 @@ func (c *Consumer) process(msg kafkago.Message) {
 		return
 	}
 
-	_, err := c.svc.HandleAnomaly(context.Background(), &payload)
+	// Use stopCtx so that Stop() can cancel in-flight HandleAnomaly calls.
+	_, err := c.svc.HandleAnomaly(c.stopCtxFn, &payload)
 	if err != nil {
 		c.logger.Error("failed to handle anomaly",
 			"rule", payload.Rule,
@@ -214,5 +226,3 @@ func (c *Consumer) process(msg kafkago.Message) {
 			"offset", msg.Offset, "err", err)
 	}
 }
-
-var _ core.EventConsumer = (*Consumer)(nil)

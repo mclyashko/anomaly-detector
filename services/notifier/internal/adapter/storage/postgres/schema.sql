@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS incidents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at TIMESTAMPTZ,
     resolution TEXT,
-    CONSTRAINT uk_incidents_dedup UNIQUE(rule, service, metric)
+    CONSTRAINT uk_incidents_dedup UNIQUE(rule, service, metric, status)
 );
+-- Partial index for dedup lookups: finds non-resolved incidents fast.
+CREATE INDEX IF NOT EXISTS idx_incidents_dedup ON incidents(rule, service, metric) WHERE status != 'RESOLVED';
 
 CREATE TABLE IF NOT EXISTS incident_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

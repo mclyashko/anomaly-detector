@@ -5,6 +5,10 @@ Requires TimescaleDB at localhost:5432 for /api/v1/train (it fetches data from D
 For evaluate, uses in-memory model loaded from disk after training.
 """
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 import os
 import sys
 
@@ -36,8 +40,8 @@ def make_parabola(n: int, amplitude: float = 0.01, offset: float = 50.0) -> list
 
 class TestSinParabolaDiscrimination:
     """
-    Синусоида — периодическая, модель предсказывает точно → 0 аномалий.
-    Парабола — непериодическая, выходит за пределы CI → много аномалий.
+    Sinusoid — periodic, model predicts accurately → 0 anomalies.
+    Parabola — non-periodic, falls outside CI → many anomalies.
     """
 
     @pytest.fixture(autouse=True)
@@ -45,11 +49,11 @@ class TestSinParabolaDiscrimination:
         """Train a model on sin signal before each test."""
         self.client = TestClient(app)
 
-        # Тренируем модель на синусоиде (200 точек достаточно для SARIMA)
+        # Train on sin wave (200 points is enough for SARIMA)
         sin_data = make_sin(200)
         response = self.client.post("/api/v1/train", json={
             "agent_id": "test-sin-agent",
-            "metric_name": "test.signal",
+            "metric_name": "test_signal",
             "signal_data": sin_data,
             "seasonality_period": S,
             "order": (1, 0, 1),
@@ -57,14 +61,21 @@ class TestSinParabolaDiscrimination:
             "confidence_level": CL,
         })
 
-        # Если TimescaleDB недоступен — skip
+        # Skip if TimescaleDB is unavailable
         if response.status_code != 200:
             pytest.skip(f"Training service unavailable: {response.status_code} {response.text}")
 
-        self.model_id = response.json()["model_id"]
+        data = response.json()
+        self.model_id = data["model_id"]
+
+        # Verify all TrainResponse fields are present
+        for field in ("ar_params", "ma_params", "seasonal_ar_params", "seasonal_ma_params",
+                      "residual_std", "confidence_level", "seasonality_period", "window_size",
+                      "order", "seasonal_order", "aicc", "training_n"):
+            assert field in data, f"TrainResponse missing field: {field}"
 
     def test_sin_no_anomalies(self):
-        """Синусоида (720 точек) → 0 аномалий после обучения на синусе."""
+        """Sinusoid (720 points) → 0 anomalies after training on sinusoid."""
         sin_history = make_sin(720)
         count = 0
         anomaly_indices = []
@@ -84,12 +95,12 @@ class TestSinParabolaDiscrimination:
                 count += 1
                 anomaly_indices.append(i)
 
-        # Допускаем ≤5 аномалий (0.7%) — boundary effects на границах синусоиды
+        # Allow ≤5 anomalies (0.7%) — boundary effects at sin wave edges
         assert count <= 5, f"sin: expected ≤5 anomalies, got {count} at {anomaly_indices}"
         print(f"sin: {count} anomalies (≤5) — PASS")
 
     def test_parabola_many_anomalies(self):
-        """Парабола (720 точек) → много аномалий (обучена на синусе)."""
+        """Parabola (720 points) → many anomalies (trained on sinusoid)."""
         parabola_history = make_parabola(720)
         count = 0
 
@@ -111,7 +122,7 @@ class TestSinParabolaDiscrimination:
         print(f"parabola: {count} anomalies (≫50) — PASS")
 
     def test_parabola_vs_sin_ratio(self):
-        """Parabola должна быть ≫5× более аномальной чем sin."""
+        """Parabola should be ≫5× more anomalous than sin."""
         sin_history = make_sin(720)
         parabola_history = make_parabola(720)
 

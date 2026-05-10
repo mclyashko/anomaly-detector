@@ -19,19 +19,19 @@ class TestTrainSarima:
     def test_raises_when_too_few_points(self):
         series = make_series([1.0, 2.0])  # only 2 points
         with pytest.raises(ValueError, match="at least 10 points"):
-            train_sarima(series)
+            train_sarima(series, seasonality_period=1, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
 
     def test_raises_when_seasonal_but_insufficient_data(self):
         # seasonality=24 but only 10 points
         series = make_series([1.0] * 10)
         with pytest.raises(ValueError, match=r"2 \* seasonality_period"):
-            train_sarima(series, seasonality_period=24)
+            train_sarima(series, seasonality_period=24, order=(1, 1, 1), seasonal_order=(1, 1, 1, 24))
 
     def test_returns_training_result(self):
         # 30 points of sinusoidal-ish data.
         values = [float(50 + 10 * np.sin(i / 5)) + np.random.normal(0, 1) for i in range(30)]
         series = make_series(values)
-        result = train_sarima(series, seasonality_period=1)
+        result = train_sarima(series, seasonality_period=1, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
 
         assert result.order == (1, 1, 1)
         assert result.seasonal_order[3] == 0  # seasonality_period=1 → non-seasonal
@@ -43,13 +43,13 @@ class TestTrainSarima:
 
     def test_non_seasonal_when_period_is_one(self):
         series = make_series([float(i) for i in range(20)])
-        result = train_sarima(series, seasonality_period=1)
+        result = train_sarima(series, seasonality_period=1, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
         assert result.seasonal_order == (0, 0, 0, 0)
         assert result.order == (1, 1, 1)
 
     def test_seasonal_when_period_greater_than_one(self):
         series = make_series([float(i % 24) for i in range(60)], freq="h")
-        result = train_sarima(series, seasonality_period=24)
+        result = train_sarima(series, seasonality_period=24, order=(1, 1, 1), seasonal_order=(1, 1, 1, 24))
         assert result.seasonal_order[3] == 24  # s = 24
 
 

@@ -1,17 +1,17 @@
-"""ML Training Service — обучает SARIMA модели и оценивает аномалии.
+"""ML Training Service — trains SARIMA models and evaluates anomalies.
 
-Сервис работает в двух режимах:
-1. HTTP API для обучения и инференса (вызывается analyzer-ом)
-2. Автоматический режим — периодически проверяет свои модели на актуальность
-   и переобучает их если данные изменились (режим «auto-retrain»)
+The service operates in two modes:
+1. HTTP API for training and inference (called by analyzer)
+2. Auto-retrain mode — periodically checks models for staleness and retrains
+   if data has changed
 
-Принцип работы:
-- При поступлении данных на обучение, модель.fit() на statsmodels SARIMAX
-- SARIMAX(1,0,1)(1,1,1,S) — упрощённая сезонная ARIMA с одним AR и MA коэффициентом
-- На инференсе: вычисляем прогноз по формуле, сравниваем с доверительным интервалом
-- Если значение за пределами CI — аномалия
+Workflow:
+- On training request, fit statsmodels SARIMAX on the provided signal data
+- SARIMAX(1,0,1)(1,1,1,S) — seasonal ARIMA with one AR and one MA coefficient
+- On inference: compute a forecast, compare against the confidence interval
+- If value is outside CI — anomaly
 
-Models хранятся как JSON-файлы в MODELS_DIR: {model_id}/metadata.json
+Models are stored as JSON files in MODELS_DIR: {model_id}/metadata.json
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel
 
 from infer import evaluate_anomaly
+from core.sarima_model import train_sarima
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +47,8 @@ MODELS_DIR.mkdir(exist_ok=True)
 ANALYZER_URL = os.getenv("ANALYZER_URL", "http://analyzer:8081")
 MODEL_REFRESH_CHECK_SEC = int(os.getenv("MODEL_REFRESH_CHECK_SEC", "60"))
 DB_DSN = os.getenv("DB_DSN", "")
+PORT = int(os.getenv("PORT", "8085"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
 # In-memory cache for quick access
 _model_cache: dict[str, dict] = {}
@@ -110,6 +113,13 @@ class TrainResponse(BaseModel):
     seasonal_ar_params: float
     seasonal_ma_params: float
     residual_std: float
+    confidence_level: float
+    seasonality_period: int
+    window_size: int
+    order: list[int]
+    seasonal_order: list[int]
+    aicc: float
+    training_n: int
     message: str
 
 
@@ -175,22 +185,11 @@ def health():
 
 @app.post("/api/v1/train", response_model=TrainResponse)
 def train(req: TrainRequest):
-    """Обучает SARIMA модель на переданных данных и сохраняет параметры.
+    """Train a SARIMA model on the provided data and persist its parameters.
 
-    Процесс:
-    1. Формируем model_id = "{agent_id}__{safe_metric_name}"
-    2. Обучаем SARIMAX с заданным порядком (по умолчанию (1,0,1)(1,1,1,S))
-    3. Извлекаем коэффициенты: ar, ma, seasonal_ar, seasonal_ma и residual_std
-    4. Сохраняем metadata.json в MODELS_DIR/{model_id}/
-
-    statsmodels SARIMAX возвращает массив params, где:
-    - params[0] = ar_params (AR(1))
-    - params[1] = ma_params (MA(1))
-    - params[2] = seasonal_ar_params (SAR(1))
-    - params[3] = seasonal_ma_params (SMA(1))
+    Uses train_sarima() from core/sarima_model.py — single unified implementation.
     """
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    import numpy as np
+    import pandas as pd
 
     model_id = _model_id(req.agent_id, req.metric_name)
 
@@ -202,81 +201,88 @@ def train(req: TrainRequest):
         len(req.signal_data),
     )
 
-    series = np.array(req.signal_data)
+    series = pd.Series(req.signal_data, dtype=float)
 
-    # Fit SARIMA model
-    model = SARIMAX(
-        series,
-        order=req.order,
-        seasonal_order=req.seasonal_order,
-        enforce_stationarity=False,
-        enforce_invertibility=False,
+    result = train_sarima(
+        timeseries=series,
+        seasonality_period=req.seasonality_period,
+        order=tuple(req.order),
+        seasonal_order=tuple(req.seasonal_order),
+        confidence_level=req.confidence_level,
+        max_iter=200,
+        window_size=max(48, req.seasonality_period + 1),
     )
-    fit = model.fit(disp=False)
 
-    # Extract parameters — statsmodels returns numpy arrays for SARIMAX
-    params = fit.params
-    ar_params = float(params[0])
-    ma_params = float(params[1])
-    seasonal_ar = float(params[2])
-    seasonal_ma = float(params[3])
-    residual_std = float(np.std(fit.resid))
+    params = result.params
 
-    # Build metadata
     metadata = {
         "model_id": model_id,
         "agent_id": req.agent_id,
         "metric_name": req.metric_name,
-        "ar_params": ar_params,
-        "ma_params": ma_params,
-        "seasonal_ar_params": seasonal_ar,
-        "seasonal_ma_params": seasonal_ma,
-        "residual_std": residual_std,
-        "confidence_level": req.confidence_level,
+        "ar_params": params["ar_params"],
+        "ma_params": params["ma_params"],
+        "seasonal_ar_params": params["seasonal_ar_params"],
+        "seasonal_ma_params": params["seasonal_ma_params"],
+        "residual_std": params["residual_std"],
+        "confidence_level": result.confidence_level,
         "seasonality_period": req.seasonality_period,
         "window_size": max(48, req.seasonality_period + 1),
-        "order": req.order,
-        "seasonal_order": req.seasonal_order,
+        "order": result.order,
+        "seasonal_order": result.seasonal_order,
         "trained_at": datetime.now(timezone.utc).isoformat(),
+        "aicc": result.aicc,
+        "d": params["d"],
+        "seasonal_d": params["seasonal_d"],
+        "sigma2": params.get("sigma2"),
+        "training_n": result.training_n,
+        "training_start": result.training_start.isoformat() if result.training_start else None,
+        "training_end": result.training_end.isoformat() if result.training_end else None,
     }
 
-    # Save to disk
     _save_model_to_disk(model_id, metadata)
-
-    # Cache in memory
     _model_cache[model_id] = metadata
 
+    msg = f"trained on {result.training_n} points, aicc={result.aicc:.2f}" if result.aicc else f"trained on {result.training_n} points"
+
     logger.info(
-        "trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f",
+        "trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f aicc=%s",
         model_id,
-        ar_params,
-        seasonal_ar,
-        residual_std,
+        params["ar_params"],
+        params["seasonal_ar_params"],
+        params["residual_std"],
+        result.aicc,
     )
 
     return TrainResponse(
         model_id=model_id,
         status="trained",
-        ar_params=ar_params,
-        ma_params=ma_params,
-        seasonal_ar_params=seasonal_ar,
-        seasonal_ma_params=seasonal_ma,
-        residual_std=residual_std,
-        message=f"Model trained and saved to {MODELS_DIR / model_id}",
+        ar_params=params["ar_params"],
+        ma_params=params["ma_params"],
+        seasonal_ar_params=params["seasonal_ar_params"],
+        seasonal_ma_params=params["seasonal_ma_params"],
+        residual_std=params["residual_std"],
+        confidence_level=result.confidence_level,
+        seasonality_period=req.seasonality_period,
+        window_size=max(48, req.seasonality_period + 1),
+        order=list(result.order),
+        seasonal_order=list(result.seasonal_order),
+        aicc=result.aicc if result.aicc else 0.0,
+        training_n=result.training_n,
+        message=msg,
     )
 
 
 @app.post("/api/v1/evaluate", response_model=AnomalyResponse)
 def evaluate(req: EvaluateRequest):
-    """Проверяет одно значение на аномальность относительно обученной модели.
+    """Check whether a value is anomalous relative to a trained model.
 
-    Логика:
-    1. Ищем модель — сначала в памяти (_model_cache), потом на диске
-    2. Вызываем evaluate_anomaly() из infer.py — основная логика там
-    3. Возвращаем JSON с флагом anomaly, прогнозом и доверительным интервалом
+    Logic:
+    1. Look up the model — first in memory (_model_cache), then on disk
+    2. Call evaluate_anomaly() from infer.py — inference logic lives there
+    3. Return JSON with anomaly flag, forecast, and confidence interval bounds
 
-    История (history) должна быть достаточно длинной — хотя бы seasonality_period + 1 точек.
-    Иначе model вернёт insufficient history.
+    History must be at least seasonality_period + 1 points.
+    Otherwise the model returns "insufficient history".
     """
     # Try cache first, then disk
     meta = _model_cache.get(req.model_id)
@@ -339,7 +345,7 @@ def get_ml_rules():
         resp = requests.get(f"{ANALYZER_URL}/api/v1/ml-rules", timeout=10)
         resp.raise_for_status()
         return resp.json()
-    except Exception as e:
+    except requests.RequestException as e:
         logger.warning("failed to fetch ml-rules from analyzer: %s", e)
         raise HTTPException(status_code=502, detail=f"Analyzer unavailable: {e}")
 
@@ -371,25 +377,25 @@ def load_existing_models():
 # ─────────────────────────────────────────────────────────────────
 
 async def _refresh_stale_models_loop():
-    """Фоновая задача: периодически проверяет модели на актуальность и переобучает.
+    """Background task: periodically checks models for staleness and retrains.
 
-    Логика:
-    1. Раз в MODEL_REFRESH_CHECK_SEC секунд запрашивает ML-правила у analyzer-а
-    2. Для каждого правила проверяет — когда последний раз обучалась модель
-    3. Если прошло больше train_interval_min минут — переобучает на свежих данных из TimescaleDB
-    4. Нужно минимум 3/4 от train_data_window точек для обучения
+    Logic:
+    1. Every MODEL_REFRESH_CHECK_SEC seconds, fetch ML rules from analyzer
+    2. For each rule, check when the model was last trained
+    3. If more than train_interval_min minutes have passed, retrain on fresh data from TimescaleDB
+    4. Need at least 75% of train_data_window points for training
 
-    Модель считается «stale» (устаревшей), если:
-    - Ещё ни разу не обучалась (last_trained = None)
-    - Прошло больше train_interval_min минут с последнего обучения
+    A model is "stale" when:
+    - It has never been trained (last_trained = None)
+    - More than train_interval_min minutes have passed since last training
     """
     import requests
 
     while True:
         await asyncio.sleep(MODEL_REFRESH_CHECK_SEC)
         try:
-            rules = _fetch_ml_rules_from_analyzer()
-            logger.info(f"[DEBUG] fetched {len(rules)} rules from analyzer")
+            rules = await asyncio.to_thread(_fetch_ml_rules_from_analyzer)
+            logger.debug("fetched %d rules from analyzer", len(rules))
             if not rules:
                 logger.info("no ML rules found in analyzer")
                 continue
@@ -406,17 +412,18 @@ async def _refresh_stale_models_loop():
                     logger.info("model stale, retraining: model_id=%s interval_min=%d",
                                 model_id, rule.train_interval_min)
                     data = repo.fetch_recent(rule.agent_id, rule.metric, rule.train_data_window)
-                    logger.info(f"[DEBUG] fetch_recent returned {len(data)} points for {rule.agent_id}/{rule.metric}")
-                    # Нужно достаточно данных для有意义ной модели — хотя бы 75% от желаемого окна
+                    logger.debug("fetch_recent returned %d points for %s/%s",
+                                len(data), rule.agent_id, rule.metric)
+                    # Need at least 75% of the training window for a meaningful model.
                     if len(data) < rule.train_data_window * 3 // 4:
                         logger.warning("insufficient data for training: got %d, want %d",
                                        len(data), rule.train_data_window)
                         continue
                     _train_model_locally(model_id, rule, data)
                 else:
-                    logger.info(f"model fresh: model_id={model_id} last_trained={last_trained}")
+                    logger.info("model fresh: model_id=%s last_trained=%s", model_id, last_trained)
 
-        except Exception:
+        except (OSError, ConnectionError) as exc:
             logger.exception("failed to refresh stale models")
 
 
@@ -427,7 +434,7 @@ def _fetch_ml_rules_from_analyzer() -> list[MLRuleInfo]:
         resp = requests.get(f"{ANALYZER_URL}/api/v1/ml-rules", timeout=10)
         resp.raise_for_status()
         return [MLRuleInfo(**r) for r in resp.json()]
-    except Exception as e:
+    except requests.RequestException as e:
         logger.warning("failed to fetch ml-rules from analyzer: %s", e)
         return []
 
@@ -448,57 +455,62 @@ def _is_stale(last_trained: str, train_interval_min: int) -> bool:
         trained = datetime.fromisoformat(last_trained.replace("Z", "+00:00"))
         age = datetime.now(timezone.utc) - trained
         return age.total_seconds() > train_interval_min * 60
-    except Exception:
-        return True  # If we can't parse, consider it stale
+    except (ValueError, AttributeError):
+        # ISO format mismatch — treat as stale so it gets retrained
+        return True
 
 
 def _train_model_locally(model_id: str, rule: MLRuleInfo, data: list[float]):
     """Train a SARIMA model and store it locally."""
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    import numpy as np
+    import pandas as pd
 
     logger.info("training model: model_id=%s seasonality=%d n=%d",
                 model_id, rule.seasonality_period, len(data))
 
-    series = np.array(data)
-    model = SARIMAX(
-        series,
+    series = pd.Series(data, dtype=float)
+
+    result = train_sarima(
+        timeseries=series,
+        seasonality_period=rule.seasonality_period,
         order=tuple(rule.order),
         seasonal_order=tuple(rule.seasonal_order),
-        enforce_stationarity=False,
-        enforce_invertibility=False,
+        confidence_level=0.95,
+        max_iter=200,
+        window_size=max(48, rule.seasonality_period + 1),
     )
-    fit = model.fit(disp=False)
 
-    params = fit.params
-    ar_params = float(params[0])
-    ma_params = float(params[1])
-    seasonal_ar = float(params[2])
-    seasonal_ma = float(params[3])
-    residual_std = float(np.std(fit.resid))
+    params = result.params
 
     metadata = {
         "model_id": model_id,
         "agent_id": rule.agent_id,
         "metric_name": rule.metric,
-        "ar_params": ar_params,
-        "ma_params": ma_params,
-        "seasonal_ar_params": seasonal_ar,
-        "seasonal_ma_params": seasonal_ma,
-        "residual_std": residual_std,
-        "confidence_level": 0.95,
+        "ar_params": params["ar_params"],
+        "ma_params": params["ma_params"],
+        "seasonal_ar_params": params["seasonal_ar_params"],
+        "seasonal_ma_params": params["seasonal_ma_params"],
+        "residual_std": params["residual_std"],
+        "confidence_level": result.confidence_level,
         "seasonality_period": rule.seasonality_period,
         "window_size": max(48, rule.seasonality_period + 1),
-        "order": rule.order,
-        "seasonal_order": rule.seasonal_order,
+        "order": result.order,
+        "seasonal_order": result.seasonal_order,
         "trained_at": datetime.now(timezone.utc).isoformat(),
+        "aicc": result.aicc,
+        "d": params["d"],
+        "seasonal_d": params["seasonal_d"],
+        "sigma2": params.get("sigma2"),
+        "training_n": result.training_n,
+        "training_start": result.training_start.isoformat() if result.training_start else None,
+        "training_end": result.training_end.isoformat() if result.training_end else None,
     }
 
     _save_model_to_disk(model_id, metadata)
     _model_cache[model_id] = metadata
 
-    logger.info("trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f",
-                model_id, ar_params, seasonal_ar, residual_std)
+    logger.info("trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f aicc=%s",
+                model_id, params["ar_params"], params["seasonal_ar_params"],
+                params["residual_std"], result.aicc)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -508,5 +520,4 @@ def _train_model_locally(model_id: str, rule: MLRuleInfo, data: list[float]):
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT", "8085"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -60,7 +60,7 @@ func (m *mockRepository) FindByID(ctx context.Context, id string) (*Incident, er
 
 func (m *mockRepository) FindByDedupKey(ctx context.Context, rule, service, metric string) (*Incident, error) {
 	for _, inc := range m.incidents {
-		if inc.Rule == rule && inc.Service == service && inc.Metric == metric && inc.Status != StatusResolved {
+		if inc.Rule == rule && inc.Service == service && inc.Metric == metric {
 			return inc, nil
 		}
 	}
@@ -98,10 +98,13 @@ func (m *mockRepository) GetComments(ctx context.Context, incidentID string) ([]
 }
 
 // txMock is a minimal transaction mock that implements pgx.Tx for testing.
+// It only implements the methods that the test code actually calls:
+// Begin, Commit, Rollback, Exec.
 type txMock struct{}
 
-func (txMock) Commit(ctx context.Context) error   { return nil }
-func (txMock) Rollback(ctx context.Context) error { return nil }
+func (txMock) Begin(ctx context.Context) (txMock, error) { return txMock{}, nil }
+func (txMock) Commit(ctx context.Context) error         { return nil }
+func (txMock) Rollback(ctx context.Context) error       { return nil }
 func (txMock) Exec(ctx context.Context, sql string, arguments ...any) (interface{ RowsAffected() int64 }, error) {
 	return nil, nil
 }
@@ -413,5 +416,206 @@ func TestNotifierService_ListIncidents(t *testing.T) {
 
 	if len(incidents) != 2 {
 		t.Errorf("incidents count = %d, want 2", len(incidents))
+	}
+}
+
+func TestNotifierService_HandleAnomaly_EscalatedIncident_NotDowngraded(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.92,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident, _ := svc.HandleAnomaly(context.Background(), payload)
+	svc.Escalate(context.Background(), incident.ID)
+
+	// Send another anomaly — ESCALATED must stay ESCALATED.
+	newPayload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.95,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	result, err := svc.HandleAnomaly(context.Background(), newPayload)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Status != StatusEscalated {
+		t.Errorf("status = %v, want ESCALATED (must not be downgraded)", result.Status)
+	}
+	if ch.escalated != 1 {
+		t.Errorf("escalated notifications = %d, want 1 (no new notification for ESCALATED)", ch.escalated)
+	}
+}
+
+func TestNotifierService_HandleAnomaly_ResolvedIncident_Reopened(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.92,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident, _ := svc.HandleAnomaly(context.Background(), payload)
+	svc.Resolve(context.Background(), incident.ID, "Fixed")
+
+	// New anomaly for same dedup key — RESOLVED must become OPEN.
+	newPayload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.99,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	result, err := svc.HandleAnomaly(context.Background(), newPayload)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Status != StatusOpen {
+		t.Errorf("status = %v, want OPEN (resolved incident must reopen)", result.Status)
+	}
+	if result.ID != incident.ID {
+		t.Errorf("incident ID changed: got %s, want %s", result.ID, incident.ID)
+	}
+}
+
+func TestNotifierService_HandleAnomaly_OpenIncident_Updated(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload1 := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.92,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident, _ := svc.HandleAnomaly(context.Background(), payload1)
+
+	// Second anomaly on OPEN incident must become UPDATED.
+	payload2 := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Value:     0.95,
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	result, err := svc.HandleAnomaly(context.Background(), payload2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.ID != incident.ID {
+		t.Errorf("incident ID changed: got %s, want %s", result.ID, incident.ID)
+	}
+	if result.Status != StatusUpdated {
+		t.Errorf("status = %v, want UPDATED", result.Status)
+	}
+}
+
+func TestNotifierService_Escalate_AlreadyResolved(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident, _ := svc.HandleAnomaly(context.Background(), payload)
+	svc.Resolve(context.Background(), incident.ID, "Fixed")
+
+	// Cannot escalate a RESOLVED incident.
+	_, err := svc.Escalate(context.Background(), incident.ID)
+	if !errors.Is(err, ErrInvalidStatusTransition) {
+		t.Errorf("expected ErrInvalidStatusTransition, got %v", err)
+	}
+}
+
+func TestNotifierService_Resolve_FromEscalated(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident, _ := svc.HandleAnomaly(context.Background(), payload)
+	svc.Escalate(context.Background(), incident.ID)
+
+	// Can resolve from ESCALATED.
+	resolved, err := svc.Resolve(context.Background(), incident.ID, "Manually resolved")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.Status != StatusResolved {
+		t.Errorf("status = %v, want RESOLVED", resolved.Status)
+	}
+}
+
+func TestNotifierService_HandleAnomaly_DifferentMetric_NewIncident(t *testing.T) {
+	repo := newMockRepo()
+	ch := &mockChannel{}
+	logger := slog.Default()
+	svc := NewNotifierService(repo, ch, logger)
+
+	payload1 := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "cpu_usage",
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident1, _ := svc.HandleAnomaly(context.Background(), payload1)
+
+	// Same rule+service, different metric — must create separate incident.
+	payload2 := &AnomalyPayload{
+		Rule:      "high_cpu",
+		Service:   "auth-service",
+		Metric:    "memory_usage",
+		Severity:  "critical",
+		Timestamp: time.Now().Unix(),
+	}
+	incident2, err := svc.HandleAnomaly(context.Background(), payload2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if incident1.ID == incident2.ID {
+		t.Errorf("expected different incident IDs for different metrics, got same: %s", incident1.ID)
+	}
+	if ch.created != 2 {
+		t.Errorf("channel created count = %d, want 2", ch.created)
 	}
 }

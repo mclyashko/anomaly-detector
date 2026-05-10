@@ -1,9 +1,6 @@
 statsmodels
 pandas
 numpy
-onnx
-onnxruntime
-minio
 psycopg2-binary
 pyyaml
 schedule

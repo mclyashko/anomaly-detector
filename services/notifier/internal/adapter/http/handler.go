@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -154,7 +153,7 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Try wrapper format: {"anomalies": [...], "count": N}
 	var wrapper struct {

@@ -9,13 +9,11 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/core"
-	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/port"
 )
 
 const (
-	anomaliesTopic = "anomalies"
-	batchSize      = 100
-	batchTimeout   = 5 * time.Millisecond
+	batchSize    = 100
+	batchTimeout = 5 * time.Millisecond
 )
 
 // Producer implements port.EventProducer by writing anomaly events to Kafka.
@@ -26,10 +24,10 @@ type Producer struct {
 	logger *slog.Logger
 }
 
-func NewProducer(brokers []string, logger *slog.Logger) *Producer {
+func NewProducer(brokers []string, topic string, logger *slog.Logger) *Producer {
 	w := &kafkago.Writer{
 		Addr:         kafkago.TCP(brokers...),
-		Topic:        anomaliesTopic,
+		Topic:        topic,
 		Balancer:     &kafkago.LeastBytes{},
 		BatchSize:    batchSize,
 		BatchTimeout: batchTimeout,
@@ -68,7 +66,7 @@ func (p *Producer) Produce(ctx context.Context, anomalies []*core.Anomaly) error
 
 	p.logger.Info("anomalies published to Kafka",
 		"count", len(msgs),
-		"topics", anomaliesTopic,
+		"topic", p.writer.Topic,
 	)
 	return nil
 }
@@ -77,5 +75,3 @@ func (p *Producer) Produce(ctx context.Context, anomalies []*core.Anomaly) error
 func (p *Producer) Close() error {
 	return p.writer.Close()
 }
-
-var _ port.EventProducer = (*Producer)(nil)

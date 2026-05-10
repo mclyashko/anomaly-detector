@@ -19,5 +19,6 @@ ENV PORT=8085
 # Create models directory
 RUN mkdir -p /app/models
 
-# Mode: "api" runs FastAPI server, otherwise runs cmd/main.py
-CMD ["sh", "-c", "if [ \"$SERVICE_MODE\" = \"api\" ]; then uvicorn app:app --host 0.0.0.0 --port $PORT; else python cmd/main.py \"$@\"; fi"]
+# Train command is no longer used — training is triggered via the HTTP API
+# or auto-retrain loop, both served by uvicorn.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8085"]

@@ -8,12 +8,10 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/mclyashko/anomaly-detector/services/ingestion/config"
 	"github.com/mclyashko/anomaly-detector/services/ingestion/internal/adapter/broker"
 	"github.com/mclyashko/anomaly-detector/services/ingestion/internal/adapter/db"
-	httphandler "github.com/mclyashko/anomaly-detector/services/ingestion/internal/adapter/http"
 	"github.com/mclyashko/anomaly-detector/services/ingestion/internal/core"
 	"github.com/mclyashko/anomaly-detector/shared/pkg/buildlog"
 )
@@ -33,9 +31,9 @@ func main() {
 	switch cfg.StorageMode {
 	case "memory":
 		storage = db.NewMemoryStorage()
-		logger.Info("using in-memory storage")
+		logger.Warn("using in-memory storage — data will be lost on restart")
 
-	case "postgres":
+	case "db":
 		ctx := context.Background()
 		pg, pool, err := db.NewPostgresStorage(ctx, cfg.DBDSN, logger)
 		if err != nil {
@@ -61,55 +59,47 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var consumer *broker.KafkaConsumer
-	if cfg.EnableBroker {
-		brokers := strings.Split(cfg.BrokerBrokers, ",")
-		for i := range brokers {
-			brokers[i] = strings.TrimSpace(brokers[i])
-		}
-		consumer, err = broker.NewKafkaConsumer(broker.ConsumerConfig{
-			Brokers:  brokers,
-			Topic:    cfg.BrokerTopic,
-			GroupID:  cfg.BrokerGroupID,
-			Workers:  cfg.BrokerWorkers,
-			Capacity: cfg.BrokerCapacity,
-		}, svc, logger)
-		if err != nil {
-			logger.Error("failed to create kafka consumer", "err", err)
-			os.Exit(1)
-		}
-		go func() {
-			logger.Info("kafka consumer starting")
-			if err := consumer.Start(ctx); err != nil {
-				logger.Error("kafka consumer error", "err", err)
-			}
-		}()
+	if !cfg.EnableBroker {
+		logger.Error("broker (Kafka) must be enabled — no HTTP fallback")
+		os.Exit(1)
 	}
 
-	handler := httphandler.New(svc, logger)
-	srv := &http.Server{
-		Addr:         ":" + cfg.HTTPPort,
-		Handler:      handler.Routes(),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+	brokers := strings.Split(cfg.BrokerBrokers, ",")
+	for i := range brokers {
+		brokers[i] = strings.TrimSpace(brokers[i])
 	}
-
+	consumer, err := broker.NewKafkaConsumer(broker.ConsumerConfig{
+		Brokers:  brokers,
+		Topic:    cfg.BrokerTopic,
+		GroupID:  cfg.BrokerGroupID,
+		Workers:  cfg.BrokerWorkers,
+		Capacity: cfg.BrokerCapacity,
+	}, svc, logger)
+	if err != nil {
+		logger.Error("failed to create kafka consumer", "err", err)
+		os.Exit(1)
+	}
 	go func() {
-		logger.Info("ingestion listening", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server error", "err", err)
+		logger.Info("kafka consumer starting")
+		if err := consumer.Start(ctx); err != nil {
+			logger.Error("kafka consumer error", "err", err)
+		}
+	}()
+
+	// Minimal HTTP health server for docker healthcheck.
+	go func() {
+		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		logger.Info("health server listening on :8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			logger.Debug("health server stopped", "err", err)
 		}
 	}()
 
 	<-ctx.Done()
 	logger.Info("shutting down")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("http shutdown error", "err", err)
-	}
 
 	if consumer != nil {
 		consumer.Stop()

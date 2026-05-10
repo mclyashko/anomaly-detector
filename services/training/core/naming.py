@@ -20,7 +20,7 @@ def model_name(agent_id: str, metric_name: str, model_type: str, version: str) -
 
     Args:
         agent_id:     Source agent identifier (e.g. "agent-1").
-        metric_name:  Metric name (e.g. "http.latency_avg_ms").
+        metric_name:  Metric name (e.g. "http_latency_avg_ms").
         model_type:   Model family (e.g. "sarima").
         version:      Semantic version string (e.g. "v1").
 

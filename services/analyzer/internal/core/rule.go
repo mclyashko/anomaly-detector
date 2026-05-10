@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -22,7 +23,7 @@ type RuleType string
 const (
 	RuleTypeThreshold RuleType = "threshold"
 	RuleTypeLua       RuleType = "lua"
-	RuleTypeML        RuleType = "ml" // future
+	RuleTypeML        RuleType = "ml"
 )
 
 // RuleConfig is the parsed YAML representation of a single rule.
@@ -52,6 +53,11 @@ type Rule interface {
 	Evaluate(m Metric) *Anomaly
 }
 
+// MLEvaluator evaluates metric values against a trained ML model.
+type MLEvaluator interface {
+	Evaluate(ctx context.Context, modelID string, history []float64, value float64) (*ml.EvaluateResponse, error)
+}
+
 // ThresholdRule implements Rule for simple threshold expressions like "value > 0.8".
 type ThresholdRule struct {
 	cfg   RuleConfig
@@ -69,9 +75,9 @@ func NewThresholdRule(cfg RuleConfig) (*ThresholdRule, error) {
 func (r *ThresholdRule) Name() string   { return r.cfg.Name }
 func (r *ThresholdRule) Metric() string { return r.cfg.Metric }
 
-// Evaluate проверяет метрику против порогового условия.
-// Возвращает Anomaly если value удовлетворяет условию (например value > 0.8).
-// nil если метрика не подходит по имени или AgentID.
+// Evaluate checks the metric against the threshold condition.
+// Returns Anomaly if value satisfies the condition (e.g. value > 0.8).
+// Returns nil if the metric name or AgentID does not match.
 func (r *ThresholdRule) Evaluate(m Metric) *Anomaly {
 	if m.Name != r.cfg.Metric {
 		return nil
@@ -113,9 +119,9 @@ func NewLuaRule(cfg RuleConfig, executor LuaExecutor) (*LuaRule, error) {
 func (r *LuaRule) Name() string   { return r.cfg.Name }
 func (r *LuaRule) Metric() string { return r.cfg.Metric }
 
-// Evaluate выполняет Lua скрипт для проверки метрики.
-// Скрипт получает таблицу с данными метрики и возвращает triggered=true/false
-// и текстовое сообщение. Возвращает nil если AgentID не совпадает.
+// Evaluate runs the Lua script to check the metric.
+// The script receives a table with metric data and returns triggered=true/false
+// and a text message. Returns nil if AgentID does not match.
 func (r *LuaRule) Evaluate(m Metric) *Anomaly {
 	if r.cfg.AgentID != "" && m.AgentID != r.cfg.AgentID {
 		return nil
@@ -145,14 +151,13 @@ func (r *LuaRule) Evaluate(m Metric) *Anomaly {
 // MLRule evaluates metrics by calling the Python ML Training Service via HTTP.
 type MLRule struct {
 	cfg       RuleConfig
-	client    *ml.Client
+	evaluator MLEvaluator
 	modelID   string
 	windowBuf []float64
-	windowMu  int // protected by windowBuf
 }
 
 // NewMLRule creates a new ML rule that calls the ML service HTTP API.
-func NewMLRule(cfg RuleConfig, client *ml.Client) *MLRule {
+func NewMLRule(cfg RuleConfig, evaluator MLEvaluator) *MLRule {
 	// Build model_id from agent_id and metric_name (matches training service convention)
 	agentID := cfg.AgentID
 	metricName := cfg.Metric
@@ -162,20 +167,20 @@ func NewMLRule(cfg RuleConfig, client *ml.Client) *MLRule {
 	modelID := agentID + "__" + strings.ReplaceAll(strings.ReplaceAll(metricName, ".", "_"), "/", "_")
 
 	return &MLRule{
-		cfg:     cfg,
-		client:  client,
-		modelID: modelID,
+		cfg:       cfg,
+		evaluator: evaluator,
+		modelID:   modelID,
 	}
 }
 
 func (r *MLRule) Name() string   { return r.cfg.Name }
 func (r *MLRule) Metric() string { return r.cfg.Metric }
 
-// Evaluate отправляет метрику в Python ML Training Service для проверки на аномальность.
-// Использует sliding window: накапливает последние seasonality_period+1 значений
-// и отправляет их вместе с текущим значением в ML сервис.
-// ML сервис возвращает forecast и доверительный интервал — если значение за пределами CI, это аномалия.
-// Возвращает nil если ML сервис недоступен или окно ещё не накопилось.
+// Evaluate sends a metric to the Python ML Training Service for anomaly detection.
+// Uses a sliding window: accumulates the last seasonality_period+1 values
+// and sends them together with the current value to the ML service.
+// The ML service returns a forecast and confidence interval — if the value is outside the CI, it's an anomaly.
+// Returns nil if the ML service is unavailable or the window hasn't been filled yet.
 func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	if r.cfg.Metric != "" && m.Name != r.cfg.Metric {
 		return nil
@@ -184,24 +189,24 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 		return nil
 	}
 
-	// Контекст не передаётся от caller-а: в polling loop нет отмены,
-	// а evaluate вызывается синхронно с коротким HTTP timeout на стороне ML client.
+	// Context is not propagated from the caller: the polling loop has no cancellation,
+	// and evaluate runs synchronously with a short HTTP timeout on the ML client side.
 	ctx := context.Background()
 
-	// windowSize = seasonality_period + 1: чтобы вычислить сезонную коррекцию
-	// нам нужно значение S периодов назад, поэтому храним S+1 последних значений.
-	// При seasonality_period=60 храним 61 значение.
+	// windowSize = seasonality_period + 1: to compute seasonal correction
+	// we need the value from S periods ago, so we store S+1 most recent values.
+	// With seasonality_period=60 we store 61 values.
 	windowSize := r.cfg.SeasonalityPeriod + 1
 
-	// Sliding window: добавляем текущее значение, удаляем самое старое если превысили размер.
-	// Это обеспечивает накопление истории без роста памяти.
+	// Sliding window: append current value, drop oldest if window exceeds size.
+	// This accumulates history without growing memory indefinitely.
 	r.windowBuf = append(r.windowBuf, m.Value)
 	if len(r.windowBuf) > windowSize {
 		r.windowBuf = r.windowBuf[len(r.windowBuf)-windowSize:]
 	}
 
-	// ML-модели нужно как минимум windowSize значений для корректного прогноза.
-	// При недостатке истории возвращаем nil — правило "молчит".
+	// ML model needs at least windowSize values for a meaningful forecast.
+	// If history is insufficient, return nil — the rule stays silent.
 	if len(r.windowBuf) < windowSize {
 		return nil
 	}
@@ -210,21 +215,30 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	history := make([]float64, len(r.windowBuf))
 	copy(history, r.windowBuf)
 
-	// DEBUG: log Evaluate call
-	fmt.Printf("[MLRule Evaluate] metric=%s value=%.4f history_len=%d window_buf_len=%d\n",
-		m.Name, m.Value, len(history), len(r.windowBuf))
+	// Log at DEBUG level on every ML evaluation once the window is full.
+	slog.Debug("MLRule Evaluate: window ready",
+		"metric", m.Name,
+		"value", m.Value,
+		"history_len", len(history),
+		"window_buf_len", len(r.windowBuf),
+	)
 
-	if r.client == nil {
+	if r.evaluator == nil {
 		return nil
 	}
-	result, err := r.client.Evaluate(ctx, r.modelID, history, m.Value)
+	result, err := r.evaluator.Evaluate(ctx, r.modelID, history, m.Value)
 	if err != nil {
 		// ML service unavailable — skip silently
 		return nil
 	}
 
-	fmt.Printf("[MLRule Evaluate] client.Evaluate result=anomaly=%v forecast=%.4f ci=[%.4f,%.4f] err=%v\n",
-		result.Anomaly, result.Forecast, result.LowerCI, result.UpperCI, err)
+	slog.Debug("MLRule Evaluate: result",
+		"metric", m.Name,
+		"anomaly", result.Anomaly,
+		"forecast", result.Forecast,
+		"ci_lower", result.LowerCI,
+		"ci_upper", result.UpperCI,
+	)
 
 	if result == nil || !result.Anomaly {
 		return nil
@@ -250,19 +264,19 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 }
 
 // RuleFactory creates a Rule from a RuleConfig.
-// The executor is required for Lua rules. The mlClient is required for ML rules.
-// Returns an error for unknown rule types or if ML rule has no client.
-func RuleFactory(cfg RuleConfig, executor LuaExecutor, mlClient *ml.Client) (Rule, error) {
+// The executor is required for Lua rules. The mlEvaluator is required for ML rules.
+// Returns an error for unknown rule types or if ML rule has no evaluator.
+func RuleFactory(cfg RuleConfig, executor LuaExecutor, mlEvaluator MLEvaluator) (Rule, error) {
 	switch cfg.Type {
 	case RuleTypeThreshold:
 		return NewThresholdRule(cfg)
 	case RuleTypeLua:
 		return NewLuaRule(cfg, executor)
 	case RuleTypeML:
-		if mlClient == nil {
-			return nil, errors.New("ML rule requires an ML service client")
+		if mlEvaluator == nil {
+			return nil, errors.New("ML rule requires an ML evaluator")
 		}
-		return NewMLRule(cfg, mlClient), nil
+		return NewMLRule(cfg, mlEvaluator), nil
 	default:
 		return nil, fmt.Errorf("unknown rule type %q for rule %q", cfg.Type, cfg.Name)
 	}

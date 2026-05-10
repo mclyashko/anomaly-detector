@@ -12,6 +12,11 @@ type MetricFetcher interface {
 	MarkAnalyzed(ctx context.Context, analyzerID string, metricIDs []int64) (int64, error)
 }
 
+// EventProducer is the port for publishing anomaly events to a broker.
+type EventProducer interface {
+	Produce(ctx context.Context, anomalies []*Anomaly) error
+}
+
 // AnalyzerService polls TimescaleDB for unanalyzed metrics, evaluates them, and publishes anomalies.
 type AnalyzerService struct {
 	reader     MetricFetcher
@@ -20,11 +25,6 @@ type AnalyzerService struct {
 	analyzerID string
 	batchSize  int
 	logger     *slog.Logger
-}
-
-// EventProducer is the port for publishing anomaly events to a broker.
-type EventProducer interface {
-	Produce(ctx context.Context, anomalies []*Anomaly) error
 }
 
 // NewAnalyzerService creates an analyzer that polls storage for metrics.
@@ -38,11 +38,11 @@ func NewAnalyzerService(
 ) *AnalyzerService {
 	return &AnalyzerService{
 		reader:     reader,
-		engine:     engine,
-		producer:   producer,
+		engine:    engine,
+		producer:  producer,
 		analyzerID: analyzerID,
-		batchSize:  batchSize,
-		logger:     logger,
+		batchSize: batchSize,
+		logger:    logger,
 	}
 }
 
@@ -64,32 +64,30 @@ func (s *AnalyzerService) Run(ctx context.Context, pollInterval time.Duration) {
 	}
 }
 
-// ProcessBatch implements BatchHandler for HTTP ingestion path.
+// ProcessBatch implements BatchHandler for the HTTP debug endpoint.
 func (s *AnalyzerService) ProcessBatch(ctx context.Context, batch Batch) {
 	if len(batch.Metrics) == 0 {
 		return
 	}
-	// Evaluate batch and publish anomalies immediately (async HTTP path).
 	anomalies := s.engine.EvaluateBatch(batch)
 	if len(anomalies) == 0 {
 		return
 	}
-	// Mark anomalous metrics as analyzed.
 	var anomalyIDs []int64
 	for _, a := range anomalies {
 		anomalyIDs = append(anomalyIDs, a.MetricID)
 	}
 	if err := s.producer.Produce(ctx, anomalies); err != nil {
-		s.logger.Error("failed to publish anomalies via HTTP path", "err", err, "count", len(anomalies))
+		s.logger.Error("failed to publish anomalies via HTTP debug path", "err", err, "count", len(anomalies))
 		return
 	}
-	s.logger.Info("anomalies published via HTTP", "anomaly_count", len(anomalies))
+	s.logger.Info("anomalies published via HTTP debug", "anomaly_count", len(anomalies))
 	if _, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, anomalyIDs); err != nil {
 		s.logger.Warn("failed to mark anomalous metrics via HTTP", "err", err)
 	}
 }
 
-// processMetrics fetches unanalyzed metrics, evaluates them in batch, and
+// ProcessMetrics fetches unanalyzed metrics, evaluates them in batch, and
 // publishes anomalies to Kafka. Anomalous metrics are marked only after successful publish.
 func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 	metrics, err := s.reader.FetchUnanalyzed(ctx, s.analyzerID, s.batchSize)
@@ -103,17 +101,14 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 		return
 	}
 
-	// Evaluate all metrics at once — engine handles parallelism internally.
 	batch := Batch{Metrics: metrics}
 	anomalies := s.engine.EvaluateBatch(batch)
 
-	// Build metricID → anomaly lookup directly from MetricID field.
 	anomalyMetricIDs := make(map[int64]bool, len(anomalies))
 	for _, a := range anomalies {
 		anomalyMetricIDs[a.MetricID] = true
 	}
 
-	// Separate: anomaly metrics → publish, normal metrics → mark analyzed.
 	var normalIDs, notifyIDs []int64
 	for _, m := range metrics {
 		if anomalyMetricIDs[m.ID] {
@@ -130,7 +125,6 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 		"to_mark_normal", len(normalIDs),
 	)
 
-	// Mark normal metrics as analyzed. Stop on any error — metrics must not be lost.
 	if len(normalIDs) > 0 {
 		rows, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, normalIDs)
 		if err != nil {
@@ -145,7 +139,6 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 		}
 	}
 
-	// Publish anomalies to Kafka. If publish fails, metrics will be re-fetched on next poll.
 	if len(notifyIDs) > 0 {
 		if err := s.producer.Produce(ctx, anomalies); err != nil {
 			s.logger.Error("failed to publish anomalies to Kafka, will retry next poll",
@@ -156,7 +149,6 @@ func (s *AnalyzerService) ProcessMetrics(ctx context.Context) {
 			"anomaly_count", len(anomalies),
 			"metric_count", len(notifyIDs))
 
-		// Only mark anomalous metrics as analyzed after successful publish.
 		rows, err := s.reader.MarkAnalyzed(ctx, s.analyzerID, notifyIDs)
 		if err != nil {
 			s.logger.Error("anomalies published but failed to mark anomalous metrics, will retry",

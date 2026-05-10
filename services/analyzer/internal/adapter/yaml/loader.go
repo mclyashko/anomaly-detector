@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/adapter/ml"
 	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/core"
-	"github.com/mclyashko/anomaly-detector/services/analyzer/internal/port"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,8 +74,8 @@ func (l *Loader) Load() ([]core.RuleConfig, error) {
 }
 
 // CompileRules loads configs from the YAML file and creates Rule instances
-// using the core.RuleFactory. The mlClient is required for ML rules.
-func CompileRules(path string, executor core.LuaExecutor, mlClient *ml.Client) ([]core.Rule, error) {
+// using the core.RuleFactory. The mlEvaluator is required for ML rules.
+func CompileRules(path string, executor core.LuaExecutor, mlEvaluator core.MLEvaluator) ([]core.Rule, error) {
 	loader := NewLoader(path)
 	configs, err := loader.Load()
 	if err != nil {
@@ -86,7 +84,7 @@ func CompileRules(path string, executor core.LuaExecutor, mlClient *ml.Client) (
 
 	rules := make([]core.Rule, 0, len(configs))
 	for _, cfg := range configs {
-		rule, err := core.RuleFactory(cfg, executor, mlClient)
+		rule, err := core.RuleFactory(cfg, executor, mlEvaluator)
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", cfg.Name, err)
 		}
@@ -94,6 +92,3 @@ func CompileRules(path string, executor core.LuaExecutor, mlClient *ml.Client) (
 	}
 	return rules, nil
 }
-
-// Verify Loader satisfies port.RuleLoader.
-var _ port.RuleLoader = (*Loader)(nil)

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -25,16 +24,16 @@ func TestMLRule_Evaluate_NilClient(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:              "test_ml",
-			Metric:            "test.signal",
+			Metric:            "test_signal",
 			Type:              RuleTypeML,
 			SeasonalityPeriod: 60,
 		},
-		client: nil,
+		evaluator: nil,
 	}
 
 	m := Metric{
 		ID:        1,
-		Name:      "test.signal",
+		Name:      "test_signal",
 		AgentID:   "agent-1",
 		Value:     5.0,
 		Timestamp: time.Now(),
@@ -51,7 +50,7 @@ func TestMLRule_Evaluate_SlidingWindow(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:              "test_ml",
-			Metric:            "test.signal",
+			Metric:            "test_signal",
 			Type:              RuleTypeML,
 			SeasonalityPeriod: 5, // small window for testing
 		},
@@ -61,7 +60,7 @@ func TestMLRule_Evaluate_SlidingWindow(t *testing.T) {
 
 	m := Metric{
 		ID:        1,
-		Name:      "test.signal",
+		Name:      "test_signal",
 		AgentID:   "agent-1",
 		Value:     6.0,
 		Timestamp: time.Now(),
@@ -91,7 +90,7 @@ func TestMLRule_Evaluate_MetricMismatch(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:   "test_ml",
-			Metric: "test.signal",
+			Metric: "test_signal",
 			Type:   RuleTypeML,
 		},
 		modelID: "agent-1__test_signal",
@@ -99,7 +98,7 @@ func TestMLRule_Evaluate_MetricMismatch(t *testing.T) {
 
 	m := Metric{
 		ID:        1,
-		Name:      "other.signal", // Different metric name
+		Name:      "other_signal", // Different metric name
 		AgentID:   "agent-1",
 		Value:     5.0,
 		Timestamp: time.Now(),
@@ -115,7 +114,7 @@ func TestMLRule_Evaluate_AgentIDMismatch(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:    "test_ml",
-			Metric:  "test.signal",
+			Metric:  "test_signal",
 			AgentID: "agent-1",
 			Type:    RuleTypeML,
 		},
@@ -124,7 +123,7 @@ func TestMLRule_Evaluate_AgentIDMismatch(t *testing.T) {
 
 	m := Metric{
 		ID:        1,
-		Name:      "test.signal",
+		Name:      "test_signal",
 		AgentID:   "agent-2", // Different agent
 		Value:     5.0,
 		Timestamp: time.Now(),
@@ -140,7 +139,7 @@ func TestMLRule_NameAndMetric(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:   "my_ml_rule",
-			Metric: "my.metric",
+			Metric: "my_metric",
 			Type:   RuleTypeML,
 		},
 	}
@@ -148,23 +147,21 @@ func TestMLRule_NameAndMetric(t *testing.T) {
 	if rule.Name() != "my_ml_rule" {
 		t.Errorf("Name() = %s, want my_ml_rule", rule.Name())
 	}
-	if rule.Metric() != "my.metric" {
-		t.Errorf("Metric() = %s, want my.metric", rule.Metric())
+	if rule.Metric() != "my_metric" {
+		t.Errorf("Metric() = %s, want my_metric", rule.Metric())
 	}
 }
 
 func TestNewMLRule_ModelIDConstruction(t *testing.T) {
-	// Test that model_id is constructed correctly from agent_id and metric.
-	// NewMLRule replaces '.' and '/' with '_' in metric names to create safe filenames.
 	tests := []struct {
 		agentID   string
 		metric    string
 		wantModel string
 	}{
-		{"agent-1", "test.signal", "agent-1__test_signal"},
-		{"agent-1", "http.latency", "agent-1__http_latency"},
+		{"agent-1", "test_signal", "agent-1__test_signal"},
+		{"agent-1", "http_latency", "agent-1__http_latency"},
 		{"agent-1", "cpu/usage", "agent-1__cpu_usage"},
-		{"", "test.signal", "*__test_signal"},
+		{"", "test_signal", "*__test_signal"},
 	}
 
 	for _, tt := range tests {
@@ -173,18 +170,10 @@ func TestNewMLRule_ModelIDConstruction(t *testing.T) {
 			Metric:  tt.metric,
 			Type:    RuleTypeML,
 		}
-
-		// Build modelID the same way NewMLRule does: agentID + "__" + sanitized metric
-		agentID := cfg.AgentID
-		if agentID == "" {
-			agentID = "*"
-		}
-		metricName := cfg.Metric
-		modelID := agentID + "__" + strings.ReplaceAll(strings.ReplaceAll(metricName, ".", "_"), "/", "_")
-
-		if modelID != tt.wantModel {
+		rule := NewMLRule(cfg, nil)
+		if rule.modelID != tt.wantModel {
 			t.Errorf("modelID = %s, want %s (agent=%s metric=%s)",
-				modelID, tt.wantModel, tt.agentID, tt.metric)
+				rule.modelID, tt.wantModel, tt.agentID, tt.metric)
 		}
 	}
 }
@@ -192,7 +181,7 @@ func TestNewMLRule_ModelIDConstruction(t *testing.T) {
 func TestRuleFactory_MLRule(t *testing.T) {
 	cfg := RuleConfig{
 		Name:              "test_ml",
-		Metric:            "test.signal",
+		Metric:            "test_signal",
 		Type:              RuleTypeML,
 		SeasonalityPeriod: 60,
 		Order:             []int{1, 0, 1},
@@ -221,7 +210,7 @@ func TestRuleFactory_MLRule(t *testing.T) {
 func TestRuleFactory_MLRule_NoClient(t *testing.T) {
 	cfg := RuleConfig{
 		Name:              "test_ml",
-		Metric:            "test.signal",
+		Metric:            "test_signal",
 		Type:              RuleTypeML,
 		SeasonalityPeriod: 60,
 		Order:             []int{1, 0, 1},
@@ -240,7 +229,7 @@ func TestMLRule_Evaluate_InsufficientHistory(t *testing.T) {
 	rule := &MLRule{
 		cfg: RuleConfig{
 			Name:              "test_ml",
-			Metric:            "test.signal",
+			Metric:            "test_signal",
 			AgentID:           "agent-1",
 			Type:              RuleTypeML,
 			SeasonalityPeriod: 60,
@@ -251,7 +240,7 @@ func TestMLRule_Evaluate_InsufficientHistory(t *testing.T) {
 	}
 
 	m := Metric{
-		Name:      "test.signal",
+		Name:      "test_signal",
 		AgentID:   "agent-1",
 		Value:     10.0,
 		Timestamp: time.Now(),
@@ -317,7 +306,7 @@ func TestParseCondition_Invalid(t *testing.T) {
 func TestThresholdRule_Evaluate(t *testing.T) {
 	cfg := RuleConfig{
 		Name:      "high_cpu",
-		Metric:    "cpu.usage",
+		Metric:    "cpu_usage",
 		Type:      RuleTypeThreshold,
 		Condition: "value > 0.8",
 		Severity:  SeverityCritical,
@@ -335,22 +324,22 @@ func TestThresholdRule_Evaluate(t *testing.T) {
 	}{
 		{
 			name:   "triggers on high value",
-			metric: Metric{Name: "cpu.usage", Value: 0.9},
+			metric: Metric{Name: "cpu_usage", Value: 0.9},
 			want:   true,
 		},
 		{
 			name:   "does not trigger on low value",
-			metric: Metric{Name: "cpu.usage", Value: 0.5},
+			metric: Metric{Name: "cpu_usage", Value: 0.5},
 			want:   false,
 		},
 		{
 			name:   "wrong metric returns nil",
-			metric: Metric{Name: "memory.usage", Value: 0.9},
+			metric: Metric{Name: "memory_usage", Value: 0.9},
 			want:   false,
 		},
 		{
 			name:   "agent ID set but empty string means no filtering",
-			metric: Metric{Name: "cpu.usage", AgentID: "other-agent", Value: 0.9},
+			metric: Metric{Name: "cpu_usage", AgentID: "other-agent", Value: 0.9},
 			want:   true,
 		},
 	}
@@ -368,7 +357,7 @@ func TestThresholdRule_Evaluate(t *testing.T) {
 func TestThresholdRule_AgentIDFiltering(t *testing.T) {
 	cfg := RuleConfig{
 		Name:      "high_cpu_agent1",
-		Metric:    "cpu.usage",
+		Metric:    "cpu_usage",
 		AgentID:   "agent-1",
 		Type:      RuleTypeThreshold,
 		Condition: "value > 0.8",
@@ -381,13 +370,13 @@ func TestThresholdRule_AgentIDFiltering(t *testing.T) {
 	}
 
 	// Matching agent should trigger
-	m1 := Metric{Name: "cpu.usage", AgentID: "agent-1", Value: 0.9}
+	m1 := Metric{Name: "cpu_usage", AgentID: "agent-1", Value: 0.9}
 	if rule.Evaluate(m1) == nil {
 		t.Errorf("expected trigger for agent-1")
 	}
 
 	// Non-matching agent should not trigger
-	m2 := Metric{Name: "cpu.usage", AgentID: "agent-2", Value: 0.9}
+	m2 := Metric{Name: "cpu_usage", AgentID: "agent-2", Value: 0.9}
 	if rule.Evaluate(m2) != nil {
 		t.Errorf("expected nil for agent-2")
 	}
@@ -396,7 +385,7 @@ func TestThresholdRule_AgentIDFiltering(t *testing.T) {
 func TestRuleEngine_EvaluateBatch(t *testing.T) {
 	thresholdCfg := RuleConfig{
 		Name:      "high_value",
-		Metric:    "test.metric",
+		Metric:    "test_metric",
 		Type:      RuleTypeThreshold,
 		Condition: "value > 100",
 		Severity:  SeverityWarning,
@@ -411,9 +400,9 @@ func TestRuleEngine_EvaluateBatch(t *testing.T) {
 
 	batch := Batch{
 		Metrics: []Metric{
-			{ID: 1, Name: "test.metric", Value: 50},
-			{ID: 2, Name: "test.metric", Value: 150},
-			{ID: 3, Name: "other.metric", Value: 200},
+			{ID: 1, Name: "test_metric", Value: 50},
+			{ID: 2, Name: "test_metric", Value: 150},
+			{ID: 3, Name: "other_metric", Value: 200},
 		},
 	}
 
@@ -438,7 +427,7 @@ func TestRuleEngine_MLRuleIndexing(t *testing.T) {
 	// Test that ML rules are indexed by agentID:metricName
 	mlCfg := RuleConfig{
 		Name:              "ml_rule",
-		Metric:            "test.signal",
+		Metric:            "test_signal",
 		AgentID:           "agent-1",
 		Type:              RuleTypeML,
 		SeasonalityPeriod: 60,
@@ -449,8 +438,8 @@ func TestRuleEngine_MLRuleIndexing(t *testing.T) {
 
 	engine := NewRuleEngine([]Rule{mlRule}, nil)
 
-	// Should be indexed under "agent-1:test.signal"
-	m := Metric{Name: "test.signal", AgentID: "agent-1", Value: 5.0}
+	// Should be indexed under "agent-1:test_signal"
+	m := Metric{Name: "test_signal", AgentID: "agent-1", Value: 5.0}
 	result := engine.Evaluate(m)
 	// With nil client this returns nil, but the indexing should work
 	if result != nil {

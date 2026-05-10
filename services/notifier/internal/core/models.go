@@ -3,14 +3,16 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"time"
 )
 
-// IncidentStatus — статус жизненного цикла инцидента.
-// OPEN: только создан
-// UPDATED: пришли новые данные по тому же инциденту (rule+service+metric)
-// ESCALATED: эскалирован
-// RESOLVED: закрыт с резолюцией
+// IncidentStatus is the lifecycle status of an incident.
+// OPEN: newly created
+// UPDATED: new data arrived for the same incident (rule+service+metric)
+// ESCALATED: escalated
+// RESOLVED: closed with resolution
 type IncidentStatus string
 
 const (
@@ -20,9 +22,9 @@ const (
 	StatusResolved  IncidentStatus = "RESOLVED"
 )
 
-// Incident — аномальный инцидент.
-// Value, Forecast, LowerCI, UpperCI, Message — последние ML-данные.
-// Сами события (events) хранят полную историю всех аномалий.
+// Incident is an anomalous incident.
+// Value, Forecast, LowerCI, UpperCI, Message are the latest ML data.
+// Events store the full history of all anomalies.
 type Incident struct {
 	ID            string         `json:"id"`
 	Rule          string         `json:"rule"`
@@ -42,17 +44,17 @@ type Incident struct {
 	Message      string         `json:"message,omitempty"`
 }
 
-// IncidentEvent — одно событие аномалии, привязанное к инциденту.
-// Payload хранит JSON с полными данными аномалии (включая ML-информацию).
+// IncidentEvent is a single anomaly event tied to an incident.
+// Payload stores JSON with full anomaly data (including ML info).
 type IncidentEvent struct {
 	ID         string          `json:"id"`
 	IncidentID string          `json:"incident_id"`
 	Payload    json.RawMessage `json:"payload"`
-	Timestamp  time.Time       `json:"timestamp"` // время из самой метрики (когда она была)
-	CreatedAt  time.Time       `json:"created_at"` // когда событие реально создалось в БД
+	Timestamp  time.Time       `json:"timestamp"` // time from the metric itself (when it was recorded)
+	CreatedAt  time.Time       `json:"created_at"` // when the event was actually created in the DB
 }
 
-// IncidentComment — комментарий к инциденту.
+// IncidentComment is a comment on an incident.
 type IncidentComment struct {
 	ID         string    `json:"id"`
 	IncidentID string    `json:"incident_id"`
@@ -60,9 +62,9 @@ type IncidentComment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// AnomalyPayload — входящее событие от analyzer.
-// Используем custom UnmarshalJSON чтобы корректно парсить timestamp из разных форматов
-// (RFC3339 строка или Unix timestamp).
+// AnomalyPayload is an incoming event from the analyzer.
+// Uses custom UnmarshalJSON to parse timestamps from different formats
+// (RFC3339 string or Unix timestamp).
 type AnomalyPayload struct {
 	Rule          string  `json:"rule"`
 	Service       string  `json:"service"`
@@ -71,7 +73,7 @@ type AnomalyPayload struct {
 	Value         float64 `json:"value"`
 	Severity      string  `json:"severity"`
 	Message       string  `json:"message"`
-	Timestamp     int64   `json:"timestamp"` // Unix timestamp в секундах
+	Timestamp     int64   `json:"timestamp"` // Unix timestamp in seconds
 	AgentID       string  `json:"agent_id,omitempty"`
 	Condition     string  `json:"condition,omitempty"`
 	ID            int64   `json:"id,omitempty"`
@@ -81,10 +83,7 @@ type AnomalyPayload struct {
 	UpperCI       float64 `json:"upper_ci,omitempty"`
 }
 
-// SetTimestamp парсит timestamp из разных форматов.
-// Приоритет: RFC3339 (2026-05-07T18:04:16Z) → Unix timestamp строка (1746643456).
-// Это исправляет баг, когда строка "2026" парсилась как Unix timestamp 2026 секунд
-// вместо того чтобы попробовать RFC3339 формат.
+// SetTimestamp parses timestamps from RFC3339 or Unix format.
 func (a *AnomalyPayload) SetTimestamp(v any) error {
 	switch val := v.(type) {
 	case float64:
@@ -115,10 +114,10 @@ func (a *AnomalyPayload) SetTimestamp(v any) error {
 	}
 }
 
-// UnmarshalJSON распарсивает JSON от analyzer.
-// Поддерживает flexible types для всех полей (string/float/int) и
-// корректно обрабатывает timestamp в любом формате (RFC3339, Unix, float).
-// После парсинга вызывает SetTimestamp для统一 обработки timestamp.
+// UnmarshalJSON parses JSON from the analyzer.
+// Supports flexible types for all fields (string/float/int) and
+// handles timestamps in any format correctly (RFC3339, Unix, float).
+// After parsing, calls SetTimestamp for unified timestamp handling.
 func (a *AnomalyPayload) UnmarshalJSON(data []byte) error {
 	type rawPayload struct {
 		Rule          any `json:"rule"`
@@ -161,7 +160,8 @@ func toString(v any) string {
 	case nil:
 		return ""
 	default:
-		return fmt.Sprintf("%v", val)
+		slog.Warn("toString: unhandled type, using empty string", "type", fmt.Sprintf("%T", v))
+		return ""
 	}
 }
 
@@ -175,9 +175,16 @@ func toFloat(v any) float64 {
 		return float64(val)
 	case int64:
 		return float64(val)
+	case string:
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return f
+		}
+		slog.Warn("toFloat: cannot parse string as float64, using 0", "value", val)
+		return 0
 	case nil:
 		return 0
 	default:
+		slog.Warn("toFloat: unhandled type, using 0", "type", fmt.Sprintf("%T", v))
 		return 0
 	}
 }
@@ -189,9 +196,9 @@ type IncidentWithDetails struct {
 	Comments []IncidentComment `json:"comments"`
 }
 
-// DedupKey возвращает ключ дедупликации для инцидента.
-// Инциденты дедуплицируются по rule+service+metric — это позволяет
-// не создавать новый инцидент если по тому же правилу уже есть открытый.
+// DedupKey returns the deduplication key for the incident.
+// Incidents are deduplicated by rule+service+metric — this prevents
+// creating a new incident if an open one already exists for the same rule.
 func (a *AnomalyPayload) DedupKey() string {
 	return a.Rule + "|" + a.Service + "|" + a.Metric
 }

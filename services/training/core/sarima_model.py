@@ -40,22 +40,22 @@ class TrainingResult:
 
 def train_sarima(
     timeseries: pd.Series,
-    seasonality_period: int = 1,
+    seasonality_period: int,
+    order: tuple[int, int, int],
+    seasonal_order: tuple[int, int, int, int],
     confidence_level: float = 0.95,
     max_iter: int = 100,
     window_size: int = 48,
 ) -> TrainingResult:
     """Train a SARIMA model on the given time series.
 
-    Order and seasonal order are selected automatically using a heuristic:
-    - For non-seasonal or short series (s <= 1): SARIMAX(1,1,1)(0,1,0,s)
-    - For seasonal series: SARIMAX(1,1,1)(1,1,1,s)
-
     Args:
         timeseries:        Pandas Series with datetime index, sorted ascending.
         seasonality_period: Seasonal period (e.g. 24 for hourly data with daily season).
-        confidence_level:   Confidence level for prediction intervals (0 < level < 1).
-        max_iter:           Maximum EM algorithm iterations for fitting.
+        order:             ARIMA order (p, d, q) — e.g. (1, 0, 1).
+        seasonal_order:    Seasonal ARIMA order (P, D, Q, s) — e.g. (1, 1, 1, 24).
+        confidence_level:  Confidence level for prediction intervals (0 < level < 1).
+        max_iter:          Maximum EM algorithm iterations for fitting.
 
     Returns:
         TrainingResult with model parameters and metadata.
@@ -78,16 +78,6 @@ def train_sarima(
     # Import statsmodels lazily so the module doesn't hard-require it at import time.
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-    # Determine model orders based on seasonality.
-    if seasonality_period <= 1:
-        # Non-seasonal or unknown seasonality: simple (1,1,1).
-        order = (1, 1, 1)
-        seasonal_order = (0, 0, 0, 0)
-    else:
-        # Seasonal: include seasonal components.
-        order = (1, 1, 1)
-        seasonal_order = (1, 1, 1, seasonality_period)
-
     logger.info(
         "training SARIMA: order=%s, seasonal_order=%s, points=%d",
         order,
@@ -102,7 +92,6 @@ def train_sarima(
         seasonal_order=seasonal_order,
         enforce_stationarity=False,
         enforce_invertibility=False,
-        simple_differencing=True,
     )
 
     fit = model.fit(disp=False, maxiter=max_iter)
@@ -113,12 +102,12 @@ def train_sarima(
         aicc = float(fit.aicc)
 
     # Extract key parameters for ONNX export.
-    # statsmodels SARIMAX именует параметры специфичным образом:
-    #   ar.L1 — AR(1) коэффициент (Lag 1)
-    #   ma.L1 — MA(1) коэффициент (Lag 1)
-    #   ar.S.L{s} — Seasonal AR коэффициент (Lag s, например ar.S.L24 для hourly данных)
-    #   ma.S.L{s} — Seasonal MA коэффициент
-    # Не все параметры присутствуют в модели если сезонность мала — поэтому fallback в 0.0.
+    # statsmodels SARIMAX names parameters by their lag notation:
+    #   ar.L1 — AR(1) coefficient (Lag 1)
+    #   ma.L1 — MA(1) coefficient (Lag 1)
+    #   ar.S.L{s} — Seasonal AR coefficient (Lag s, e.g. ar.S.L24 for hourly data)
+    #   ma.S.L{s} — Seasonal MA coefficient
+    # Not all parameters are present when seasonality is small — fallback to 0.0.
     params = {
         "order": order,
         "seasonal_order": seasonal_order,
@@ -127,12 +116,12 @@ def train_sarima(
         "ar_params": fit.params.get("ar.L1", 0.0) if "ar.L1" in fit.params.index else 0.0,
         "ma_params": fit.params.get("ma.L1", 0.0) if "ma.L1" in fit.params.index else 0.0,
         "seasonal_ar_params": (
-            float(fit.params.get("ar.S.L24", 0.0))
+            float(fit.params.get(f"ar.S.L{seasonality_period}", 0.0))
             if f"ar.S.L{seasonality_period}" in fit.params.index
             else 0.0
         ),
         "seasonal_ma_params": (
-            float(fit.params.get("ma.S.L24", 0.0))
+            float(fit.params.get(f"ma.S.L{seasonality_period}", 0.0))
             if f"ma.S.L{seasonality_period}" in fit.params.index
             else 0.0
         ),
@@ -155,13 +144,23 @@ def train_sarima(
         params["residual_std"],
     )
 
+    # Try to extract training time range from the series index.
+    # If the index is not datetime-like (e.g. plain integer positions), use None.
+    training_start: datetime | None = None
+    training_end: datetime | None = None
+    if len(timeseries) > 0:
+        idx = timeseries.index[0]
+        if hasattr(idx, "to_pydatetime"):
+            training_start = idx.to_pydatetime()
+            training_end = timeseries.index[-1].to_pydatetime()
+
     return TrainingResult(
         order=order,
         seasonal_order=seasonal_order,
         confidence_level=confidence_level,
         training_n=len(timeseries),
-        training_start=timeseries.index[0].to_pydatetime() if len(timeseries) > 0 else None,
-        training_end=timeseries.index[-1].to_pydatetime() if len(timeseries) > 0 else None,
+        training_start=training_start,
+        training_end=training_end,
         aicc=aicc,
         params=params,
     )

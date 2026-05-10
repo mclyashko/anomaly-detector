@@ -27,8 +27,8 @@ type HTTPScrapeCollector struct {
 	client      *http.Client
 }
 
-// NewHTTPScrapeCollector создаёт HTTP-скрейпер для указанного сервиса.
-// serviceName используется как label в метриках, metricsURL — эндпоинт /metrics.
+// NewHTTPScrapeCollector creates an HTTP scraper for the specified service.
+// serviceName is used as a label on metrics, metricsURL is the /metrics endpoint.
 func NewHTTPScrapeCollector(serviceName, metricsURL string) *HTTPScrapeCollector {
 	return &HTTPScrapeCollector{
 		serviceName: serviceName,
@@ -37,7 +37,7 @@ func NewHTTPScrapeCollector(serviceName, metricsURL string) *HTTPScrapeCollector
 	}
 }
 
-// Name возвращает имя коллектора в формате "http_scrape:{serviceName}".
+// Name returns the collector name in the format "http_scrape:{serviceName}".
 func (c *HTTPScrapeCollector) Name() string { return "http_scrape:" + c.serviceName }
 
 func (c *HTTPScrapeCollector) Collect(ctx context.Context) ([]domain.Metric, error) {
@@ -65,10 +65,10 @@ func (c *HTTPScrapeCollector) Collect(ctx context.Context) ([]domain.Metric, err
 	now := time.Now().UTC()
 
 	return []domain.Metric{
-		{Name: "http.requests_total", Value: float64(s.HTTPRequestsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
-		{Name: "http.errors_total", Value: float64(s.HTTPErrorsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
-		{Name: "http.latency_avg_ms", Value: s.HTTPLatencyAvgMs, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
-		{Name: "worker.ops_total", Value: float64(s.WorkerOpsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
-		{Name: "test.signal", Value: s.TestSignal, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
+		{Name: "http_requests_total", Value: float64(s.HTTPRequestsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
+		{Name: "http_errors_total", Value: float64(s.HTTPErrorsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
+		{Name: "http_latency_avg_ms", Value: s.HTTPLatencyAvgMs, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
+		{Name: "worker_ops_total", Value: float64(s.WorkerOpsTotal), Labels: labels, Type: domain.MetricTypeCounter, Timestamp: now},
+		{Name: "test_signal", Value: s.TestSignal, Labels: labels, Type: domain.MetricTypeGauge, Timestamp: now},
 	}, nil
 }

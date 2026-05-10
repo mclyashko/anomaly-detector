@@ -4,6 +4,7 @@
 package envconfig
 
 import (
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
@@ -46,6 +47,7 @@ func GetBool(key string, fallback ...bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
+		slog.Warn("invalid bool env var, using fallback", "key", key, "value", v)
 		if len(fallback) > 0 {
 			return fallback[0]
 		}

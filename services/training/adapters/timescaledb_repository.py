@@ -52,7 +52,7 @@ class TimescaleDBRepository:
             rows = cur.fetchall()
             cur.close()
             conn.close()
-        except Exception:
+        except (psycopg2.Error, ConnectionError, OSError) as exc:
             logger.exception("TimescaleDB fetch failed for %s/%s", agent_id, metric_name)
             return pd.Series(dtype=float)
 
@@ -98,7 +98,7 @@ class TimescaleDBRepository:
             rows = cur.fetchall()
             cur.close()
             conn.close()
-        except Exception:
+        except (psycopg2.Error, ConnectionError, OSError) as exc:
             logger.exception("TimescaleDB fetch_recent failed for %s/%s limit=%d", agent_id, metric_name, limit)
             return []
 

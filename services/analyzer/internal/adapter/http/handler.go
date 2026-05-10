@@ -22,9 +22,9 @@ type MLRulesProvider interface {
 
 // Handler wires HTTP routes to the analyzer.
 type Handler struct {
-	svc         BatchHandler
-	mlRules     MLRulesProvider
-	logger      *slog.Logger
+	svc     BatchHandler
+	mlRules MLRulesProvider
+	logger  *slog.Logger
 }
 
 func New(svc BatchHandler, mlRules MLRulesProvider, logger *slog.Logger) *Handler {

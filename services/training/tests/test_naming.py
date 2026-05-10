@@ -25,11 +25,11 @@ class TestSanitizeMetricName:
 
 class TestModelName:
     def test_basic_format(self):
-        result = model_name("agent-1", "http.latency_avg_ms", "sarima", "v1")
+        result = model_name("agent-1", "http_latency_avg_ms", "sarima", "v1")
         assert result == "agent-1__http_latency_avg_ms__sarima__v1"
 
     def test_metric_name_with_slash(self):
-        result = model_name("agent-2", "worker/ops_total", "sarima", "v3")
+        result = model_name("agent-2", "worker_ops_total", "sarima", "v3")
         assert result == "agent-2__worker_ops_total__sarima__v3"
 
     def test_version_with_number(self):

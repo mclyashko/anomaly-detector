@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapters/ui"
+	"github.com/mclyashko/anomaly-detector/services/notifier/internal/adapter/ui"
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/core"
 )
 

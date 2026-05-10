@@ -12,12 +12,12 @@ import (
 // Cross-platform; no cgo or /proc dependencies.
 type SystemCollector struct{}
 
-// NewSystemCollector создаёт коллектор, который собирает runtime-метрики Go процесса:
+// NewSystemCollector creates a collector that gathers Go runtime metrics:
 // memory (heap alloc/sys/inuse, stack), GC (last pause, total runs), goroutines.
-// Работает без cgo и без /proc — кроссплатформенный.
+// Works without cgo and without /proc — cross-platform.
 func NewSystemCollector() *SystemCollector { return &SystemCollector{} }
 
-// Name возвращает имя коллектора для логирования.
+// Name returns the collector name for logging purposes.
 func (c *SystemCollector) Name() string { return "system" }
 
 func (c *SystemCollector) Collect(_ context.Context) ([]domain.Metric, error) {
@@ -27,16 +27,16 @@ func (c *SystemCollector) Collect(_ context.Context) ([]domain.Metric, error) {
 	now := time.Now().UTC()
 
 	// Index of the most recent GC pause in the circular buffer.
-	lastPauseIdx := (ms.NumGC + 255) % 256
+	lastPauseIdx := ms.NumGC % 256
 
 	return []domain.Metric{
-		gauge("system.memory.heap_alloc_bytes", float64(ms.HeapAlloc), now),
-		gauge("system.memory.heap_sys_bytes", float64(ms.HeapSys), now),
-		gauge("system.memory.heap_inuse_bytes", float64(ms.HeapInuse), now),
-		gauge("system.memory.stack_inuse_bytes", float64(ms.StackInuse), now),
-		gauge("system.gc.last_pause_ns", float64(ms.PauseNs[lastPauseIdx]), now),
-		counter("system.gc.total_runs", float64(ms.NumGC), now),
-		gauge("system.goroutines", float64(runtime.NumGoroutine()), now),
+		gauge("system_memory_heap_alloc_bytes", float64(ms.HeapAlloc), now),
+		gauge("system_memory_heap_sys_bytes", float64(ms.HeapSys), now),
+		gauge("system_memory_heap_inuse_bytes", float64(ms.HeapInuse), now),
+		gauge("system_memory_stack_inuse_bytes", float64(ms.StackInuse), now),
+		gauge("system_gc_last_pause_ns", float64(ms.PauseNs[lastPauseIdx]), now),
+		counter("system_gc_total_runs", float64(ms.NumGC), now),
+		gauge("system_goroutines", float64(runtime.NumGoroutine()), now),
 	}, nil
 }
 

@@ -1,7 +1,7 @@
 {
   "model_id": "test-sin-agent__test_signal",
   "agent_id": "test-sin-agent",
-  "metric_name": "test.signal",
+  "metric_name": "test_signal",
   "ar_params": -0.5081220869673425,
   "ma_params": 0.5457854770640259,
   "seasonal_ar_params": -0.4852721780730511,

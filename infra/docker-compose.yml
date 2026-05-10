@@ -10,7 +10,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres -d anomaly"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 8
 
   kafka:
     image: confluentinc/cp-kafka:7.7.0
@@ -71,10 +71,10 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/healthz"]
-      interval: 10s
+      interval: 5s
       timeout: 3s
-      retries: 6
-      start_period: 20s
+      retries: 12
+      start_period: 40s
     restart: unless-stopped
 
   training:
@@ -82,9 +82,6 @@ services:
       context: ..
       dockerfile: services/training/Dockerfile
     env_file: env/training.env
-    environment:
-      SERVICE_MODE: "api"
-      DB_DSN: "postgres://postgres:secret@timescaledb:5432/anomaly?sslmode=disable"
     ports: ["8085:8085"]
     depends_on:
       timescaledb:
@@ -93,7 +90,8 @@ services:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8085/health"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   analyzer:

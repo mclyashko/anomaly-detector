@@ -8,8 +8,6 @@ import (
 )
 
 type Config struct {
-	// HTTP server
-	HTTPPort string
 	// Broker (Kafka) consumer
 	EnableBroker   bool
 	BrokerBrokers  string // comma-separated broker addresses
@@ -19,34 +17,33 @@ type Config struct {
 	BrokerCapacity int
 	// Storage
 	DBDSN       string
-	StorageMode string // "memory" or "postgres"
+	StorageMode string // "memory" or "db"
 	LogLevel    string
 }
 
-// Load читает переменные окружения и возвращает конфигурацию ingestion-сервиса.
-// Поддерживает два режима: memory (для разработки) и postgres (для прода).
-// Также настраивает Kafka consumer если ENABLE_BROKER=true.
+// Load reads environment variables and returns the ingestion service configuration.
+// Supports two modes: memory (development) and postgres (production).
+// Also configures the Kafka consumer if ENABLE_BROKER=true.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 
 	cfg := Config{
-		HTTPPort:       envconfig.Get("HTTP_PORT", "8080"),
 		EnableBroker:   envconfig.Get("ENABLE_BROKER", "false") == "true",
 		BrokerBrokers:  envconfig.Get("BROKER_BROKERS", "localhost:9092"), // comma-separated
 		BrokerTopic:    envconfig.Get("BROKER_TOPIC", "metrics"),
 		BrokerGroupID:  envconfig.Get("BROKER_GROUP_ID", "ingestion-group"),
 		BrokerWorkers:  envconfig.GetInt("BROKER_WORKERS", 8),
 		BrokerCapacity: envconfig.GetInt("BROKER_CAPACITY", 256),
-		DBDSN:          envconfig.Get("DB_DSN", "postgres://postgres:secret@timescaledb:5432/anomaly?sslmode=disable"),
-		StorageMode:    envconfig.Get("STORAGE_MODE", "memory"),
+		DBDSN:          envconfig.Get("DB_DSN", ""),
+		StorageMode:    envconfig.Get("STORAGE_MODE", "db"),
 		LogLevel:       envconfig.Get("LOG_LEVEL", "info"),
 	}
 
-	if cfg.StorageMode != "memory" && cfg.StorageMode != "postgres" {
-		return Config{}, fmt.Errorf("STORAGE_MODE must be 'memory' or 'postgres', got %q", cfg.StorageMode)
+	if cfg.StorageMode != "memory" && cfg.StorageMode != "db" {
+		return Config{}, fmt.Errorf("STORAGE_MODE must be 'memory' or 'db', got %q", cfg.StorageMode)
 	}
-	if cfg.StorageMode == "postgres" && cfg.DBDSN == "" {
-		return Config{}, fmt.Errorf("DB_DSN must not be empty when STORAGE_MODE=postgres")
+	if cfg.StorageMode == "db" && cfg.DBDSN == "" {
+		return Config{}, fmt.Errorf("DB_DSN must not be empty when STORAGE_MODE=db")
 	}
 	return cfg, nil
 }

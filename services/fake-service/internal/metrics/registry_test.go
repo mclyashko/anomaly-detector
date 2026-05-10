@@ -118,3 +118,68 @@ func TestRegistry_Concurrent_NoDataRace(t *testing.T) {
 		t.Errorf("worker_ops = %d, want %d", s.WorkerOpsTotal, n)
 	}
 }
+
+func TestRegistry_SwitchSignal_TogglesBetweenAAndB(t *testing.T) {
+	reg := metrics.NewRegistry()
+
+	// Start with SignalA.
+	if reg.GetActiveSignal() != metrics.SignalA {
+		t.Errorf("initial signal = %v, want SignalA", reg.GetActiveSignal())
+	}
+
+	// Switch once — should be B.
+	sig := reg.SwitchSignal()
+	if sig != metrics.SignalB {
+		t.Errorf("after switch = %v, want SignalB", sig)
+	}
+
+	// Switch again — should be A.
+	sig = reg.SwitchSignal()
+	if sig != metrics.SignalA {
+		t.Errorf("after second switch = %v, want SignalA", sig)
+	}
+
+	// Switch again — should be B.
+	sig = reg.SwitchSignal()
+	if sig != metrics.SignalB {
+		t.Errorf("after third switch = %v, want SignalB", sig)
+	}
+}
+
+func TestRegistry_Snapshot_ActiveSignalField(t *testing.T) {
+	reg := metrics.NewRegistry()
+
+	// Initially A.
+	s := reg.Snapshot()
+	if s.ActiveSignal != "A" {
+		t.Errorf("active_signal = %q, want A", s.ActiveSignal)
+	}
+
+	// Switch to B.
+	reg.SwitchSignal()
+	s = reg.Snapshot()
+	if s.ActiveSignal != "B" {
+		t.Errorf("active_signal = %q, want B", s.ActiveSignal)
+	}
+
+	// Switch back to A.
+	reg.SwitchSignal()
+	s = reg.Snapshot()
+	if s.ActiveSignal != "A" {
+		t.Errorf("active_signal = %q, want A", s.ActiveSignal)
+	}
+}
+
+func TestRegistry_Snapshot_TestSignal_WithoutGenerator(t *testing.T) {
+	reg := metrics.NewRegistry()
+
+	// Without StartSignalGenerator, signals are at initial atomic value 0.
+	// math.Float64frombits(0) = 0.0, so both signals read as 0 until first tick.
+	s := reg.Snapshot()
+	if s.TestSignal != 0.0 {
+		t.Errorf("test_signal = %v, want 0.0 before generator started", s.TestSignal)
+	}
+	if s.ActiveSignal != "A" {
+		t.Errorf("active_signal = %q, want A", s.ActiveSignal)
+	}
+}

@@ -31,17 +31,12 @@ func main() {
 	}
 
 	var sndr port.Sender
-	if cfg.EnableKafka {
-		brokers := strings.Split(cfg.KafkaBrokers, ",")
-		for i := range brokers {
-			brokers[i] = strings.TrimSpace(brokers[i])
-		}
-		sndr = sender.NewKafkaSender(brokers, cfg.KafkaTopic, logger)
-		logger.Info("using kafka sender", "brokers", brokers, "topic", cfg.KafkaTopic)
-	} else {
-		sndr = sender.NewHTTPSender(cfg.IngestionURL, cfg.SendTimeout, cfg.MaxRetries, logger)
-		logger.Info("using http sender", "url", cfg.IngestionURL)
+	brokers := strings.Split(cfg.KafkaBrokers, ",")
+	for i := range brokers {
+		brokers[i] = strings.TrimSpace(brokers[i])
 	}
+	sndr = sender.NewKafkaSender(brokers, cfg.KafkaTopic, logger)
+	logger.Info("using kafka sender", "brokers", brokers, "topic", cfg.KafkaTopic)
 
 	agent := service.NewAgentService(cfg.AgentID, cfg.CollectInterval, collectors, sndr, logger)
 

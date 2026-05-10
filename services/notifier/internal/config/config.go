@@ -2,28 +2,30 @@ package config
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/mclyashko/anomaly-detector/shared/pkg/envconfig"
 )
 
 type Config struct {
-	HTTPPort      string
-	DBDSN         string
-	LogLevel      string
-	KafkaBrokers  string
+	HTTPPort             string
+	DBDSN                string
+	LogLevel             string
+	KafkaBrokers         string
+	KafkaAnomaliesTopic  string
 }
 
-// Load читает переменные окружения и возвращает конфигурацию notifier-сервиса.
-// PostgreSQL DSN для хранения инцидентов, Kafka brokers для потребления аномалий.
+// Load reads environment variables and returns the notifier service configuration.
+// PostgreSQL DSN for incident storage, Kafka brokers for consuming anomalies.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 
 	cfg := Config{
-		HTTPPort:     getEnv("HTTP_PORT", "8082"),
-		DBDSN:        getEnv("DB_DSN", "postgres://postgres:postgres@localhost:5432/notifier?sslmode=disable"),
-		LogLevel:     getEnv("LOG_LEVEL", "info"),
-		KafkaBrokers: getEnv("KAFKA_BROKERS", "kafka:9092"),
+		HTTPPort:            envconfig.Get("HTTP_PORT", "8082"),
+		DBDSN:               envconfig.Get("DB_DSN", ""),
+		LogLevel:             envconfig.Get("LOG_LEVEL", "info"),
+		KafkaBrokers:         envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
+		KafkaAnomaliesTopic:  envconfig.Get("KAFKA_ANOMALIES_TOPIC", "anomalies"),
 	}
 
 	if cfg.DBDSN == "" {
@@ -31,11 +33,4 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
 }

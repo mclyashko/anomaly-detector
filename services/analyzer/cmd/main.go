@@ -35,9 +35,9 @@ func main() {
 	defer luaExecutor.Close()
 
 	// --- ML Service Client Setup ---
-	var mlClient *ml.Client
+	var mlEvaluator core.MLEvaluator
 	if cfg.MLServiceURL != "" {
-		mlClient = ml.NewClient(ml.Config{
+		mlEvaluator = ml.NewClient(ml.Config{
 			URL:     cfg.MLServiceURL,
 			Timeout: 10 * time.Second,
 		})
@@ -47,7 +47,7 @@ func main() {
 	}
 
 	// Load and compile rules from YAML.
-	rules, err := yaml.CompileRules(cfg.RulesFile, luaExecutor, mlClient)
+	rules, err := yaml.CompileRules(cfg.RulesFile, luaExecutor, mlEvaluator)
 	if err != nil {
 		logger.Error("failed to load rules", "rules_file", cfg.RulesFile, "err", err)
 		os.Exit(1)
@@ -71,7 +71,7 @@ func main() {
 	for i := range brokers {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
-	producer := broker.NewProducer(brokers, logger)
+	producer := broker.NewProducer(brokers, cfg.KafkaAnomaliesTopic, logger)
 	defer producer.Close()
 
 	// Create the analyzer service with polling.
@@ -85,7 +85,7 @@ func main() {
 		logger,
 	)
 
-	// HTTP handler with ML rules endpoint for training service.
+	// HTTP handler for ML rules and debug analyze endpoint.
 	httpHandler := http.New(svc, ruleEngine, logger)
 	httpServer := &stdlibhttp.Server{
 		Addr:         ":" + cfg.HTTPPort,

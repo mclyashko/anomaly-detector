@@ -15,7 +15,8 @@ type Config struct {
 	// Storage
 	DBDSN string
 	// Kafka
-	KafkaBrokers string
+	KafkaBrokers       string
+	KafkaAnomaliesTopic string
 	// Analyzer settings
 	AnalyzerID   string
 	PollInterval time.Duration
@@ -24,21 +25,22 @@ type Config struct {
 	MLServiceURL string
 }
 
-// Load читает переменные окружения и возвращает конфигурацию analyzer-сервиса.
-// Настраивает polling интервал, размер батча, подключение к TimescaleDB и ML service URL.
+// Load reads environment variables and returns the analyzer service configuration.
+// Sets up polling interval, batch size, TimescaleDB connection, and ML service URL.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 
 	cfg := Config{
-		HTTPPort:     envconfig.Get("HTTP_PORT", "8081"),
-		RulesFile:    envconfig.Get("RULES_FILE", "rules.yaml"),
-		LogLevel:     envconfig.Get("LOG_LEVEL", "info"),
-		DBDSN:        envconfig.Get("DB_DSN", "postgres://postgres:secret@timescaledb:5432/anomaly?sslmode=disable"),
-		KafkaBrokers: envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
-		AnalyzerID:   envconfig.Get("ANALYZER_ID", "analyzer-1"),
-		PollInterval: envconfig.GetDurationSec("ANALYZER_POLL_INTERVAL_SEC", 10),
-		BatchSize:    envconfig.GetInt("ANALYZER_BATCH_SIZE", 100),
-		MLServiceURL: envconfig.Get("ML_SERVICE_URL", ""),
+		HTTPPort:            envconfig.Get("HTTP_PORT", "8081"),
+		RulesFile:           envconfig.Get("RULES_FILE", "rules.yaml"),
+		LogLevel:            envconfig.Get("LOG_LEVEL", "info"),
+		DBDSN:               envconfig.Get("DB_DSN", ""),
+		KafkaBrokers:        envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
+		KafkaAnomaliesTopic: envconfig.Get("KAFKA_ANOMALIES_TOPIC", "anomalies"),
+		AnalyzerID:          envconfig.Get("ANALYZER_ID", "analyzer-1"),
+		PollInterval:        envconfig.GetDurationSec("ANALYZER_POLL_INTERVAL_SEC", 10),
+		BatchSize:           envconfig.GetInt("ANALYZER_BATCH_SIZE", 100),
+		MLServiceURL:        envconfig.Get("ML_SERVICE_URL", ""),
 	}
 
 	if cfg.RulesFile == "" {

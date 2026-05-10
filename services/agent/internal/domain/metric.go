@@ -2,29 +2,29 @@ package domain
 
 import "time"
 
-// MetricType определяет тип метрики — counter (монотонно растёт) или gauge (может произвольно меняться).
+// MetricType defines the metric type — counter (monotonically increasing) or gauge (can change freely).
 type MetricType string
 
 const (
-	MetricTypeGauge   MetricType = "gauge"   // мгновенное значение, может быть любым
-	MetricTypeCounter MetricType = "counter" // монотонно увеличивается (например, количество запросов)
+	MetricTypeGauge   MetricType = "gauge"   // instantaneous value, can be anything
+	MetricTypeCounter MetricType = "counter" // monotonically increasing (e.g. request count)
 )
 
-// Metric — один samples в time series от agent к ingestion.
-// Name — имя метрики (например "system.memory.heap_alloc_bytes"),
-// Value — числовое значение, Type — gauge или counter.
+// Metric is one sample in a time series from agent to ingestion.
+// Name is the metric name (e.g. "system.memory.heap_alloc_bytes"),
+// Value is the numeric value, Type is gauge or counter.
 type Metric struct {
-	Name      string            `json:"name"`      // имя метрики в формате " subsystem.metric_name"
-	Value     float64           `json:"value"`     // числовое значение
-	Labels    map[string]string `json:"labels,omitempty"` // дополнительные лейблы (например service="fake-service")
-	Timestamp time.Time         `json:"timestamp"` // время когда значение было считано
-	Type      MetricType        `json:"type"`      // gauge или counter
+	Name      string            `json:"name"`      // metric name in "subsystem.metric_name" format
+	Value     float64           `json:"value"`     // numeric value
+	Labels    map[string]string `json:"labels,omitempty"` // additional labels (e.g. service="fake-service")
+	Timestamp time.Time         `json:"timestamp"` // time when the value was collected
+	Type      MetricType        `json:"type"`      // gauge or counter
 }
 
-// Batch — группа метрик от одного agent за один запрос.
-// AgentID идентифицирует источник, CreatedAt — время формирования батча.
+// Batch is a group of metrics from one agent in a single request.
+// AgentID identifies the source, CreatedAt is the batch formation time.
 type Batch struct {
-	AgentID   string    `json:"agent_id"` // уникальный ID агента (например "agent-1")
-	Metrics   []Metric  `json:"metrics"`   // список метрик в этом батче
-	CreatedAt time.Time `json:"created_at"` // время когда батч был создан
+	AgentID   string    `json:"agent_id"` // unique agent ID (e.g. "agent-1")
+	Metrics   []Metric  `json:"metrics"`   // list of metrics in this batch
+	CreatedAt time.Time `json:"created_at"` // time when the batch was created
 }

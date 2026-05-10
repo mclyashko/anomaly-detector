@@ -102,7 +102,7 @@ func (r *Repository) FindByDedupKey(ctx context.Context, rule, service, metric s
 	query := `
 		SELECT id, rule, service, metric, status, severity, created_at, updated_at, resolved_at, resolution
 		FROM incidents
-		WHERE rule = $1 AND service = $2 AND metric = $3 AND status != 'RESOLVED'
+		WHERE rule = $1 AND service = $2 AND metric = $3
 		ORDER BY created_at DESC
 		LIMIT 1
 	`

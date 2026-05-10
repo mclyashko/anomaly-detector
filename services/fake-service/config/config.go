@@ -13,8 +13,8 @@ type Config struct {
 	LogLevel    string
 }
 
-// Load читает переменные окружения и возвращает конфигурацию fake-service.
-// Порт HTTP-сервера, количество CPU-bound воркеров и уровень логирования.
+// Load reads environment variables and returns the fake-service configuration.
+// HTTP server port, number of CPU-bound workers, and logging level.
 func Load() (Config, error) {
 	_ = godotenv.Load()
 

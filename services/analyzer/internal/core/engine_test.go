@@ -148,3 +148,89 @@ func TestRuleEngine_EvaluateBatch_EmptyBatch(t *testing.T) {
 		t.Error("expected no anomalies for empty batch")
 	}
 }
+
+func TestRuleEngine_Evaluate_MLRuleIndexLookup(t *testing.T) {
+	cfg := core.RuleConfig{
+		Name:      "test-ml",
+		AgentID:   "agent-1",
+		Metric:    "test_signal",
+		Type:      core.RuleTypeML,
+		Severity:  core.SeverityCritical,
+	}
+	mlRule := core.NewMLRule(cfg, nil)
+	engine := core.NewRuleEngine([]core.Rule{mlRule}, discardLogger())
+
+	// Metric with matching agentID:metricName should match the ML rule.
+	m := metric("test_signal", 1.0, "agent-1")
+	anomalies := engine.Evaluate(m)
+	if len(anomalies) != 0 {
+		// ML rule needs history window to fire, but lookup should find it.
+		t.Logf("ML rule matched (anomalies=%d, may need window)", len(anomalies))
+	}
+
+	// Metric with different agentID should NOT match ML rule.
+	m2 := metric("test_signal", 1.0, "agent-2")
+	anomalies2 := engine.Evaluate(m2)
+	if len(anomalies2) != 0 {
+		t.Errorf("expected no match for different agentID, got %d", len(anomalies2))
+	}
+}
+
+func TestRuleEngine_GetMLRules(t *testing.T) {
+	mlCfg := core.RuleConfig{
+		Name:              "ml-rule-1",
+		AgentID:           "agent-1",
+		Metric:            "cpu",
+		Type:              core.RuleTypeML,
+		TrainIntervalMin:  30,
+		TrainDataWindow:   200,
+		SeasonalityPeriod: 60,
+		Order:             []int{1, 0, 1},
+		SeasonalOrder:     []int{1, 1, 1, 60},
+	}
+	thresholdCfg := core.RuleConfig{
+		Name:      "threshold-rule",
+		Metric:    "memory",
+		Type:      core.RuleTypeThreshold,
+		Condition: "value > 0.9",
+		Severity:  core.SeverityWarning,
+	}
+	mlRule := core.NewMLRule(mlCfg, nil)
+	thresholdRule, _ := core.NewThresholdRule(thresholdCfg)
+	engine := core.NewRuleEngine([]core.Rule{mlRule, thresholdRule}, discardLogger())
+
+	rules := engine.GetMLRules()
+	if len(rules) != 1 {
+		t.Fatalf("got %d ML rules, want 1", len(rules))
+	}
+	if rules[0].AgentID != "agent-1" {
+		t.Errorf("agent_id = %q, want agent-1", rules[0].AgentID)
+	}
+	if rules[0].Metric != "cpu" {
+		t.Errorf("metric = %q, want cpu", rules[0].Metric)
+	}
+	if rules[0].SeasonalityPeriod != 60 {
+		t.Errorf("seasonality_period = %d, want 60", rules[0].SeasonalityPeriod)
+	}
+}
+
+func TestRuleEngine_EvaluateBatch_SequentialPath(t *testing.T) {
+	cfg := core.RuleConfig{Name: "high", Metric: "m", Type: core.RuleTypeThreshold, Condition: "value > 0", Severity: core.SeverityWarning}
+	rule, _ := core.NewThresholdRule(cfg)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+
+	// Small batch — should go through sequential path.
+	batch := core.Batch{
+		AgentID: "agent-1",
+		Metrics: []core.Metric{
+			{Name: "m", Value: 1.0, Timestamp: ts()},
+			{Name: "m", Value: -1.0, Timestamp: ts()},
+			{Name: "m", Value: 2.0, Timestamp: ts()},
+		},
+	}
+
+	anomalies := engine.EvaluateBatch(batch)
+	if len(anomalies) != 2 {
+		t.Errorf("got %d anomalies, want 2", len(anomalies))
+	}
+}

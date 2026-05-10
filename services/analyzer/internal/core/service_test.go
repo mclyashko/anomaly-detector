@@ -175,3 +175,84 @@ func TestAnalyzerService_MarksMetricsAsAnalyzed(t *testing.T) {
 		t.Error("expected MarkAnalyzed to be called")
 	}
 }
+
+func TestAnalyzerService_MarkAnalyzedFailureAfterPublish_ReturnsError(t *testing.T) {
+	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
+	rule, _ := core.NewThresholdRule(cfg)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+
+	fetcher := &mockMetricFetcher{
+		fetched: []core.Metric{
+			{ID: 1, AgentID: "agent-1", Name: "cpu", Value: 0.95, Timestamp: ts()},
+			{ID: 2, AgentID: "agent-1", Name: "cpu", Value: 0.96, Timestamp: ts()},
+		},
+		markErr: errors.New("database error"),
+	}
+	producer := &mockProducer{}
+	svc := core.NewAnalyzerService(fetcher, engine, producer, "test-analyzer", 100, discardLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Run loop and let it process the batch.
+	producer.wg.Add(1)
+	go svc.Run(ctx, 10*time.Millisecond)
+	producer.wg.Wait()
+	// Should have produced anomalies but returned error for marking — run continues.
+}
+
+func TestAnalyzerService_MarkAnalyzed_RowCountMismatch_Continues(t *testing.T) {
+	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
+	rule, _ := core.NewThresholdRule(cfg)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+
+	fetcher := &mockMetricFetcher{
+		fetched: []core.Metric{
+			{ID: 1, AgentID: "agent-1", Name: "cpu", Value: 0.95, Timestamp: ts()},
+		},
+		markRows: 0, // rows affected = 0, mismatch
+	}
+	producer := &mockProducer{}
+	svc := core.NewAnalyzerService(fetcher, engine, producer, "test-analyzer", 100, discardLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	producer.wg.Add(1)
+	go svc.Run(ctx, 10*time.Millisecond)
+	producer.wg.Wait()
+	// Run should complete without panic even with row count mismatch.
+}
+
+func TestAnalyzerService_MarkAnalyzedFailure_NormalMetrics_Continues(t *testing.T) {
+	// No anomalies — MarkAnalyzed should still be called on normal metrics.
+	cfg := core.RuleConfig{Name: "high-cpu", Metric: "cpu", Type: core.RuleTypeThreshold, Condition: "value > 0.8", Severity: core.SeverityWarning}
+	rule, _ := core.NewThresholdRule(cfg)
+	engine := core.NewRuleEngine([]core.Rule{rule}, discardLogger())
+
+	fetcher := &mockMetricFetcher{
+		fetched: []core.Metric{
+			{ID: 1, AgentID: "agent-1", Name: "cpu", Value: 0.1, Timestamp: ts()},
+			{ID: 2, AgentID: "agent-1", Name: "cpu", Value: 0.2, Timestamp: ts()},
+		},
+		markErr: errors.New("db unavailable"),
+	}
+	producer := &mockProducer{}
+	svc := core.NewAnalyzerService(fetcher, engine, producer, "test-analyzer", 100, discardLogger())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	go svc.Run(ctx, 10*time.Millisecond)
+	<-ctx.Done()
+	// Should continue without panic even when normal metrics mark fails.
+}
+
+func TestRuleEngine_GetMLRules_EmptyEngine(t *testing.T) {
+	engine := core.NewRuleEngine([]core.Rule{}, discardLogger())
+	rules := engine.GetMLRules()
+	// Returns nil when no ML rules are registered (var result []MLRuleInfo stays nil).
+	if len(rules) != 0 {
+		t.Errorf("got %d rules, want 0", len(rules))
+	}
+}

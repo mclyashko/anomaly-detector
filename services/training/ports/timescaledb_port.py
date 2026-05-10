@@ -24,7 +24,7 @@ class TimescaleDBPort(Protocol):
 
         Args:
             agent_id:    Identifier of the metric source (e.g. "agent-1").
-            metric_name: Name of the metric (e.g. "http.latency_avg_ms").
+            metric_name: Name of the metric (e.g. "http_latency_avg_ms").
             days:       Number of past days to fetch.
 
         Returns:

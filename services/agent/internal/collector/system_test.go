@@ -9,13 +9,13 @@ import (
 )
 
 var wantSystemMetrics = []string{
-	"system.memory.heap_alloc_bytes",
-	"system.memory.heap_sys_bytes",
-	"system.memory.heap_inuse_bytes",
-	"system.memory.stack_inuse_bytes",
-	"system.gc.last_pause_ns",
-	"system.gc.total_runs",
-	"system.goroutines",
+	"system_memory_heap_alloc_bytes",
+	"system_memory_heap_sys_bytes",
+	"system_memory_heap_inuse_bytes",
+	"system_memory_stack_inuse_bytes",
+	"system_gc_last_pause_ns",
+	"system_gc_total_runs",
+	"system_goroutines",
 }
 
 func TestSystemCollector_ReturnsAllMetrics(t *testing.T) {
@@ -59,7 +59,7 @@ func TestSystemCollector_MetricTypes(t *testing.T) {
 
 	for _, m := range metrics {
 		switch m.Name {
-		case "system.gc.total_runs":
+		case "system_gc_total_runs":
 			if m.Type != domain.MetricTypeCounter {
 				t.Errorf("%q: want counter, got %v", m.Name, m.Type)
 			}

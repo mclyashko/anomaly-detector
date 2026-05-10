@@ -51,6 +51,10 @@ type KafkaConsumer struct {
 	wg     sync.WaitGroup
 	stopMu sync.Mutex
 	stopped bool // true after Stop() has been called
+
+	stopCtxFn   context.Context
+	stopCancel  context.CancelFunc
+	stopOnce    sync.Once
 }
 
 // kafkaFetcher abstracts the Kafka read operations needed by the consumer.
@@ -91,6 +95,9 @@ func NewKafkaConsumer(cfg ConsumerConfig, svc *core.IngestionService, logger *sl
 
 // Start begins the consume loop. It blocks until the context is cancelled.
 func (c *KafkaConsumer) Start(ctx context.Context) error {
+	c.stopCtxFn, c.stopCancel = context.WithCancel(context.Background())
+	defer c.stopCancel()
+
 	c.logger.Info("kafka consumer starting",
 		"brokers", c.cfg.Brokers,
 		"topic", c.cfg.Topic,
@@ -147,6 +154,10 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down workers and closes the Kafka reader.
 func (c *KafkaConsumer) Stop() {
+	c.stopOnce.Do(func() {
+		c.stopCancel()
+	})
+
 	c.stopMu.Lock()
 	if c.stopped {
 		c.stopMu.Unlock()
@@ -228,7 +239,7 @@ func (c *KafkaConsumer) process(job rawMessage) {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * 200 * time.Millisecond)
 		}
-		if err := c.service.HandleBatch(context.Background(), batch); err != nil {
+		if err := c.service.HandleBatch(c.stopCtxFn, batch); err != nil {
 			var ve *core.ValidationError
 			if errors.As(err, &ve) {
 				c.logger.Warn("invalid batch from kafka, skipping",

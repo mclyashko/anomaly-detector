@@ -8,22 +8,22 @@ import (
 	"time"
 )
 
-// ErrIncidentNotFound возвращается когда инцидент не найден.
+// ErrIncidentNotFound is returned when an incident is not found.
 var ErrIncidentNotFound = errors.New("incident not found")
 
-// ErrInvalidStatusTransition возвращается при недопустимой смене статуса.
+// ErrInvalidStatusTransition is returned when a status change is not allowed.
 var ErrInvalidStatusTransition = errors.New("invalid status transition")
 
-// NotifierService управляет жизненным циклом инцидентов.
-// Инциденты создаются при обнаружении аномалий и обновляются при поступлении новых данных
-// с тем же rule+service+metric (deduplication).
+// NotifierService manages the lifecycle of incidents.
+// Incidents are created when anomalies are detected and updated when new data arrives
+// for the same rule+service+metric (deduplication).
 type NotifierService struct {
-	repo    IncidentRepository // доступ к данным инцидентов
-	channel NotifierChannel     // уведомления (логирование и т.д.)
+	repo    IncidentRepository // data access
+	channel NotifierChannel    // notifications (logging, etc.)
 	logger  *slog.Logger
 }
 
-// NewNotifierService создаёт новый сервис.
+// NewNotifierService creates a new service instance.
 func NewNotifierService(repo IncidentRepository, channel NotifierChannel, logger *slog.Logger) *NotifierService {
 	return &NotifierService{
 		repo:    repo,
@@ -32,12 +32,12 @@ func NewNotifierService(repo IncidentRepository, channel NotifierChannel, logger
 	}
 }
 
-// HandleAnomaly обрабатывает аномалию от analyzer.
-// Логика:
-//   - Ищет существующий открытый инцидент с тем же rule+service+metric (dedup key).
-//   - Если нашёл — обновляет его (status=UPDATED) и добавляет событие.
-//   - Если не нашёл — создаёт новый инцидент (status=OPEN) и событие в одной транзакции.
-// Это гарантирует что новые аномалии по тому же rule+service+metric не создают новых инцидентов.
+// HandleAnomaly processes an anomaly from the analyzer.
+// Logic:
+//   - Look for an existing open incident with the same rule+service+metric (dedup key).
+//   - If found — update it (status=UPDATED) and append an event.
+//   - If not found — create a new incident (status=OPEN) and event in a single transaction.
+// This ensures new anomalies for the same rule+service+metric do not create new incidents.
 func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPayload) (*Incident, error) {
 	// Check for existing open incident with same dedup key.
 	existing, err := s.repo.FindByDedupKey(ctx, payload.Rule, payload.Service, payload.Metric)
@@ -46,8 +46,12 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 	}
 
 	if existing != nil {
-		// Update existing incident.
-		existing.Status = StatusUpdated
+		// Keep ESCALATED unchanged; re-open RESOLVED; otherwise update status.
+		if existing.Status == StatusResolved {
+			existing.Status = StatusOpen
+		} else if existing.Status != StatusEscalated {
+			existing.Status = StatusUpdated
+		}
 		existing.UpdatedAt = time.Now().UTC()
 		existing.Value = payload.Value
 		existing.Forecast = payload.Forecast
@@ -127,13 +131,13 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 	return incident, nil
 }
 
-// Delete удаляет инцидент (используется для компенсирующих действий).
+// Delete removes an incident (used for compensating actions).
 func (s *NotifierService) Delete(ctx context.Context, id string) error {
 	return s.repo.Delete(ctx, id)
 }
 
-// Escalate меняет статус инцидента на ESCALATED.
-// Нельзя эскалировать уже закрытый инцидент (ErrInvalidStatusTransition).
+// Escalate changes the incident status to ESCALATED.
+// Cannot escalate a resolved incident (ErrInvalidStatusTransition).
 func (s *NotifierService) Escalate(ctx context.Context, id string) (*Incident, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -162,9 +166,9 @@ func (s *NotifierService) Escalate(ctx context.Context, id string) (*Incident, e
 	return incident, nil
 }
 
-// Resolve закрывает инцидент с резолюцией.
-// Устанавливает status=RESOLVED, ResolvedAt=текущее время, Resolution=текст резолюции.
-// Нельзя закрыть уже закрытый инцидент (ErrInvalidStatusTransition).
+// Resolve closes an incident with a resolution.
+// Sets status=RESOLVED, ResolvedAt=now, Resolution=text.
+// Cannot resolve an already resolved incident (ErrInvalidStatusTransition).
 func (s *NotifierService) Resolve(ctx context.Context, id, resolution string) (*Incident, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -193,8 +197,8 @@ func (s *NotifierService) Resolve(ctx context.Context, id, resolution string) (*
 	return incident, nil
 }
 
-// AddComment добавляет комментарий к инциденту.
-// Также обновляет UpdatedAt инцидента (чтобы изменить порядок в списке).
+// AddComment adds a comment to an incident.
+// Also updates the incident UpdatedAt to reorder it in the list.
 func (s *NotifierService) AddComment(ctx context.Context, id, text string) (*IncidentComment, error) {
 	// Verify incident exists.
 	if _, err := s.repo.FindByID(ctx, id); err != nil {
@@ -224,7 +228,7 @@ func (s *NotifierService) AddComment(ctx context.Context, id, text string) (*Inc
 	return comment, nil
 }
 
-// GetIncident возвращает инцидент со всеми событиями и комментариями.
+// GetIncident returns an incident with all its events and comments.
 func (s *NotifierService) GetIncident(ctx context.Context, id string) (*IncidentWithDetails, error) {
 	incident, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -248,7 +252,7 @@ func (s *NotifierService) GetIncident(ctx context.Context, id string) (*Incident
 	}, nil
 }
 
-// ListIncidents возвращает все инциденты, отсортированные по updated_at (сначала свежие).
+// ListIncidents returns all incidents sorted by updated_at (freshest first).
 func (s *NotifierService) ListIncidents(ctx context.Context) ([]Incident, error) {
 	return s.repo.List(ctx)
 }

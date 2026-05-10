@@ -19,10 +19,7 @@ test-unit: ## Run unit tests for all services
 test-integration: ## Run integration tests
 	go test ./tests/integration/... -v
 
-build-up: ## Build and start all services (no ML)
-	$(COMPOSE) up --build
-
-build-up-ml: ## Build and start all services including ML training service
+build-up: ## Build and start all services (including training service)
 	$(COMPOSE) up --build
 
 build-down: ## Stop all services
@@ -53,7 +50,7 @@ clean: ## Remove build artifacts
 	go clean ./...
 
 run-ml: ## Run ML training service locally (port 8085)
-	cd services/training && PORT=8085 .venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 8085
+	cd services/training && .venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 8085
 
 train-local: ## Run training pipeline locally (one-shot training)
 	cd services/training && .venv/bin/python cmd/main.py

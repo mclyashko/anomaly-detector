@@ -127,7 +127,7 @@ POST /api/v1/ingest
   "agent_id": "agent-1",
   "metrics": [
     {
-      "name": "http.latency_avg_ms",
+      "name": "http_latency_avg_ms",
       "value": 12.5,
       "type": "gauge",
       "timestamp": "2026-04-02T10:00:00Z",
@@ -205,7 +205,7 @@ rules:
   # Пороговое правило: срабатывает если value > 100
   - name: high_latency
     enabled: true
-    metric: http.latency_avg_ms
+    metric: http_latency_avg_ms
     type: threshold
     condition: "value > 100"
     severity: warning
@@ -214,7 +214,7 @@ rules:
   # Все ML параметры required для type=ml.
   - name: signal_anomaly
     enabled: true
-    metric: test.signal
+    metric: test_signal
     agent_id: agent-1      # пусто = все агенты
     type: ml
     severity: critical
@@ -262,7 +262,7 @@ anomaly = value < CI_lower OR value > CI_upper
 
 ## Fake-Service Signal Toggle (ML Testing)
 
-Fake-service генерирует тестовый signal `test.signal` и предоставляет REST API для переключения между двумя паттернами — **Signal A** и **Signal B**. Это позволяет тестировать ML-обнаружение аномалий без внесения реальных аномалий.
+Fake-service генерирует тестовый signal `test_signal` и предоставляет REST API для переключения между двумя паттернами — **Signal A** и **Signal B**. Это позволяет тестировать ML-обнаружение аномалий без внесения реальных аномалий.
 
 ### Сигналы
 

@@ -24,6 +24,7 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 		"http_errors_total":   5,
 		"http_latency_avg_ms": 12.5,
 		"worker_ops_total":    999,
+		"test_signal":         0.5,
 	})
 	defer srv.Close()
 
@@ -32,8 +33,8 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(metrics) != 4 {
-		t.Fatalf("got %d metrics, want 4", len(metrics))
+	if len(metrics) != 5 {
+		t.Fatalf("got %d metrics, want 5", len(metrics))
 	}
 
 	byName := make(map[string]domain.Metric, len(metrics))
@@ -42,10 +43,11 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 	}
 
 	checks := map[string]float64{
-		"http.requests_total": 100,
-		"http.errors_total":   5,
-		"http.latency_avg_ms": 12.5,
-		"worker.ops_total":    999,
+		"http_requests_total":  100,
+		"http_errors_total":    5,
+		"http_latency_avg_ms":  12.5,
+		"worker_ops_total":     999,
+		"test_signal":         0.5,
 	}
 	for name, want := range checks {
 		m, ok := byName[name]
@@ -64,10 +66,11 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 
 func TestHTTPScrapeCollector_MetricTypes(t *testing.T) {
 	srv := fakeMetricsServer(map[string]any{
-		"http_requests_total": 1,
-		"http_errors_total":   0,
+		"http_requests_total":  1,
+		"http_errors_total":    0,
 		"http_latency_avg_ms": 1.0,
-		"worker_ops_total":    1,
+		"worker_ops_total":     1,
+		"test_signal":         0.5,
 	})
 	defer srv.Close()
 
@@ -76,7 +79,7 @@ func TestHTTPScrapeCollector_MetricTypes(t *testing.T) {
 
 	for _, m := range metrics {
 		switch m.Name {
-		case "http.latency_avg_ms":
+		case "http_latency_avg_ms", "test_signal":
 			if m.Type != domain.MetricTypeGauge {
 				t.Errorf("%q: want gauge, got %v", m.Name, m.Type)
 			}

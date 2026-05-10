@@ -143,9 +143,9 @@ func (r *Registry) tickSignals() {
 		noiseScale      = 0.007 // ±0.021 noise — gives residual_std ≈ 0.02-0.04
 	)
 
-	// Малое детерминированное "случайное" число: берём t по модулю 7, получаем 0-6,
-	// вычитаем 3 → диапазон [-3, +3], умножаем на noiseScale → ±0.021.
-	// Это не настоящий random, но даёт достаточный разброс для realism.
+	// Small deterministic "random": take t mod 7 → 0-6, subtract 3 → range [-3, +3],
+	// multiply by noiseScale → ±0.021.
+	// Not true random, but gives enough spread for realism.
 	noise := (float64(int64(t)%7) - 3) * noiseScale
 
 	signalA := math.Sin(2*math.Pi*t/60.0)*signalAmplitude + noise

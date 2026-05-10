@@ -96,7 +96,7 @@ func TestAnomalyPayload_MLFields(t *testing.T) {
 	payload := `{
 		"rule": "test_ml",
 		"service": "agent-1",
-		"metric": "test.signal",
+		"metric": "test_signal",
 		"value": 10.5,
 		"severity": "critical",
 		"message": "value outside CI",

@@ -106,7 +106,7 @@ func (e *RuleEngine) Evaluate(m Metric) []*Anomaly {
 // GetMLRules returns training configuration for all ML rules.
 func (e *RuleEngine) GetMLRules() []MLRuleInfo {
 	var result []MLRuleInfo
-	for i, rule := range e.rules {
+	for _, rule := range e.rules {
 		cfg := extractRuleConfig(rule)
 		if cfg == nil || cfg.Type != RuleTypeML {
 			continue
@@ -120,7 +120,6 @@ func (e *RuleEngine) GetMLRules() []MLRuleInfo {
 			Order:             cfg.Order,
 			SeasonalOrder:     cfg.SeasonalOrder,
 		})
-		_ = i // rule index not needed in output
 	}
 	return result
 }
@@ -145,9 +144,9 @@ func (e *RuleEngine) EvaluateBatch(batch Batch) []*Anomaly {
 		}
 	} else {
 		// Parallel — amortize evaluation across goroutines for high throughput.
-		// Каждый горутин вычисляет аномалии для своего чанка, кладёт в локальный слайс.
-		// mutex.Lock/unlock нужен только при мерже локального результата в общий — это
-		// единственная точка, где результаты из горутин попадают в result.
+		// Each goroutine computes anomalies for its chunk and stores results in a local slice.
+		// mutex.Lock/unlock is only needed when merging the local result into the shared result —
+		// this is the single point where goroutine results enter the final result.
 		var wg sync.WaitGroup
 		mu := sync.Mutex{}
 

@@ -1,8 +1,6 @@
 package core
 
-import (
-	"context"
-)
+import "context"
 
 // IncidentRepository defines the storage interface for incidents.
 type IncidentRepository interface {
@@ -38,8 +36,8 @@ type IncidentRepository interface {
 
 	// BeginTx starts a transaction and executes fn within it.
 	// If fn returns an error the transaction is rolled back; otherwise it is committed.
-	// txType is an opaque transaction handle — concrete implementations use their own type.
-	BeginTx(ctx context.Context, fn func(txType interface{}) error) error
+	// tx is the underlying pgx.Tx — concrete implementations use pgx.Tx directly.
+	BeginTx(ctx context.Context, fn func(tx interface{}) error) error
 
 	// CreateInTx inserts a new incident using the provided transaction.
 	CreateInTx(ctx context.Context, txType interface{}, incident *Incident) error
