@@ -1,0 +1,66 @@
+rules:
+  - name: test_signal_ml
+    enabled: false
+    agent_id: agent-1
+    metric: test_signal
+    type: ml
+    severity: critical
+    train_interval_min: 30
+    train_data_window: 500
+    seasonality_period: 60
+    order: [1, 0, 1]
+    seasonal_order: [1, 1, 1, 60]
+
+  - name: high_cpu
+    enabled: false
+    agent_id: agent-1
+    metric: http_latency_avg_ms
+    type: threshold
+    condition: "value > 100"
+    severity: warning
+
+  - name: very_high_cpu
+    enabled: false
+    agent_id: agent-1
+    metric: http_latency_avg_ms
+    type: threshold
+    condition: "value > 500"
+    severity: critical
+
+  - name: high_worker_load
+    enabled: false
+    agent_id: agent-1
+    metric: worker_ops_total
+    type: threshold
+    condition: "value > 10000"
+    severity: warning
+
+  - name: error_rate_high
+    enabled: false
+    agent_id: agent-1
+    metric: http_errors_total
+    type: threshold
+    condition: "value > 5"
+    severity: critical
+
+  - name: new_signal_ml
+    enabled: true
+    agent_id: agent-1
+    metric: test_signal
+    type: ml
+    severity: critical
+    train_interval_min: 30
+    train_data_window: 200
+    seasonality_period: 60
+    order: [1, 0, 1]
+    seasonal_order: [1, 1, 1, 60]
+
+  - name: test_signal_ks
+    enabled: false
+    agent_id: agent-1
+    metric: test_signal
+    type: ks
+    severity: critical
+    reference_window: 60
+    min_window_size: 30
+    significance_level: 0.05

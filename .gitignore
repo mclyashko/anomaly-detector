@@ -1,25 +1,200 @@
-# Binaries
+# =============================================================================
+# BINARIES & BUILDS
+# =============================================================================
+
 bin/
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+build/
 
-# Go workspace sum (generated)
+# Go
 go.work.sum
 
-# Env files
-.env
-*.env.local
+# =============================================================================
+# ENV FILES & SECRETS
+# By default, env files are excluded to avoid committing secrets.
+# Non-secret service configs (no real credentials) are explicitly tracked:
+!.env
+!.env.local
+!.env.*.local
+infra/env/*.env
+*.pem
+*.key
+*.crt
+credentials.json
 
-# IDE
+# =============================================================================
+# IDE & EDITORS
+# =============================================================================
+
 .idea/
 .vscode/
 *.swp
+*.swo
+*~
+.ninja_deps
+.ninja_log
 
+# JetBrains
+.idea/
+*.iml
+
+# =============================================================================
 # OS
+# =============================================================================
+
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# ONNX models (large binaries — store in registry, not git)
+# Linux
+*~
+
+# =============================================================================
+# LANGUAGE-SPECIFIC
+# =============================================================================
+
+# --- Go ---
+vendor/
+*.test
+
+# --- Python ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Lua ---
+*.luac
+
+# --- ONNX models (large binaries — store in registry, not git) ---
 *.onnx
 
-# Lua compiled
-*.luac
+# =============================================================================
+# DOCKER
+# =============================================================================
+
+docker-compose.override.yml
+
+# =============================================================================
+# CLOUDS & DEPLOYMENT
+# =============================================================================
+
+.cf/
+.cloud/
+角色/权限.png
+
+# =============================================================================
+# TESTING & COVERAGE
+# =============================================================================
+
+.analytics/
+.coverage.*
+coverage/
+htmlcov/
+
+# =============================================================================
+# TEMP & MISC
+# =============================================================================
+
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+
+# Claude Code (local settings — never commit)
+.claude/
+
+# Local configs
+*.local.yml
+docker-compose.local.yml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# mkdocs
+site/
