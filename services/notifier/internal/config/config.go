@@ -8,11 +8,11 @@ import (
 )
 
 type Config struct {
-	HTTPPort             string
-	DBDSN                string
-	LogLevel             string
-	KafkaBrokers         string
-	KafkaAnomaliesTopic  string
+	HTTPPort            string
+	DBDSN               string
+	LogLevel            string
+	KafkaBrokers        string
+	KafkaAnomaliesTopic string
 }
 
 // Load reads environment variables and returns the notifier service configuration.
@@ -23,9 +23,9 @@ func Load() (Config, error) {
 	cfg := Config{
 		HTTPPort:            envconfig.Get("HTTP_PORT", "8082"),
 		DBDSN:               envconfig.Get("DB_DSN", ""),
-		LogLevel:             envconfig.Get("LOG_LEVEL", "info"),
-		KafkaBrokers:         envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
-		KafkaAnomaliesTopic:  envconfig.Get("KAFKA_ANOMALIES_TOPIC", "anomalies"),
+		LogLevel:            envconfig.Get("LOG_LEVEL", "info"),
+		KafkaBrokers:        envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
+		KafkaAnomaliesTopic: envconfig.Get("KAFKA_ANOMALIES_TOPIC", "anomalies"),
 	}
 
 	if cfg.DBDSN == "" {

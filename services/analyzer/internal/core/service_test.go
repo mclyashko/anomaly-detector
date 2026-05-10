@@ -13,11 +13,11 @@ import (
 // --- mock producer ---
 
 type mockProducer struct {
-	mu        sync.Mutex
-	received  []*core.Anomaly
+	mu         sync.Mutex
+	received   []*core.Anomaly
 	produceErr error
-	called    int
-	wg        sync.WaitGroup
+	called     int
+	wg         sync.WaitGroup
 }
 
 func (m *mockProducer) Produce(_ context.Context, anomalies []*core.Anomaly) error {
@@ -35,13 +35,13 @@ func (m *mockProducer) Produce(_ context.Context, anomalies []*core.Anomaly) err
 // --- mock metric fetcher ---
 
 type mockMetricFetcher struct {
-	mu          sync.Mutex
-	fetched     []core.Metric
-	fetchErr    error
-	markErr     error
-	markRows    int64
-	markCalled  bool
-	analyzerID  string
+	mu         sync.Mutex
+	fetched    []core.Metric
+	fetchErr   error
+	markErr    error
+	markRows   int64
+	markCalled bool
+	analyzerID string
 }
 
 func (m *mockMetricFetcher) FetchUnanalyzed(ctx context.Context, analyzerID string, limit int) ([]core.Metric, error) {

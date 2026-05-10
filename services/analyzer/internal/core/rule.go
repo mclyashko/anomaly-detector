@@ -37,11 +37,11 @@ type RuleConfig struct {
 	Script    string   `yaml:"script"`    // e.g. "./rules/cpu_rule.lua" for lua
 	Severity  Severity `yaml:"severity"`
 	// ML training params (required for ml type rules)
-	TrainIntervalMin  int    `yaml:"train_interval_min"`   // minutes between retraining
-	TrainDataWindow   int    `yaml:"train_data_window"`   // how many points to fetch for training
-	SeasonalityPeriod int    `yaml:"seasonality_period"`  // data points per seasonal cycle
-	Order             []int  `yaml:"order"`               // ARIMA order [p,d,q]
-	SeasonalOrder     []int  `yaml:"seasonal_order"`      // SARIMA seasonal order [P,D,Q,S]
+	TrainIntervalMin  int   `yaml:"train_interval_min"` // minutes between retraining
+	TrainDataWindow   int   `yaml:"train_data_window"`  // how many points to fetch for training
+	SeasonalityPeriod int   `yaml:"seasonality_period"` // data points per seasonal cycle
+	Order             []int `yaml:"order"`              // ARIMA order [p,d,q]
+	SeasonalOrder     []int `yaml:"seasonal_order"`     // SARIMA seasonal order [P,D,Q,S]
 }
 
 // Rule is the core interface that every rule type implements.
@@ -245,21 +245,21 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	}
 
 	return &Anomaly{
-		ID:           m.ID,
-		Rule:         r.cfg.Name,
-		Metric:       m.Name,
-		MetricID:     m.ID,
-		Value:        m.Value,
-		Condition:    "ml_anomaly",
-		Severity:     r.cfg.Severity,
-		Timestamp:    m.Timestamp,
-		Message:      result.Message,
-		AgentID:      m.AgentID,
-		Service:      m.AgentID,
-		Forecast:     result.Forecast,
+		ID:            m.ID,
+		Rule:          r.cfg.Name,
+		Metric:        m.Name,
+		MetricID:      m.ID,
+		Value:         m.Value,
+		Condition:     "ml_anomaly",
+		Severity:      r.cfg.Severity,
+		Timestamp:     m.Timestamp,
+		Message:       result.Message,
+		AgentID:       m.AgentID,
+		Service:       m.AgentID,
+		Forecast:      result.Forecast,
 		ExpectedValue: result.Forecast,
-		LowerCI:      result.LowerCI,
-		UpperCI:      result.UpperCI,
+		LowerCI:       result.LowerCI,
+		UpperCI:       result.UpperCI,
 	}
 }
 

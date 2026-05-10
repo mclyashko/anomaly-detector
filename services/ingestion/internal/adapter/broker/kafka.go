@@ -42,19 +42,19 @@ const (
 // KafkaConsumer implements port.MetricConsumer on top of a Kafka topic.
 // It fetches messages from Kafka and dispatches them to a worker pool.
 type KafkaConsumer struct {
-	cfg ConsumerConfig
+	cfg     ConsumerConfig
 	logger  *slog.Logger
 	service *core.IngestionService
 
-	reader kafkaFetcher // Kafka message fetcher; injectable for testing
-	jobs   chan rawMessage
-	wg     sync.WaitGroup
-	stopMu sync.Mutex
+	reader  kafkaFetcher // Kafka message fetcher; injectable for testing
+	jobs    chan rawMessage
+	wg      sync.WaitGroup
+	stopMu  sync.Mutex
 	stopped bool // true after Stop() has been called
 
-	stopCtxFn   context.Context
-	stopCancel  context.CancelFunc
-	stopOnce    sync.Once
+	stopCtxFn  context.Context
+	stopCancel context.CancelFunc
+	stopOnce   sync.Once
 }
 
 // kafkaFetcher abstracts the Kafka read operations needed by the consumer.
@@ -69,7 +69,7 @@ func makeKafkaFetcher(cfg ConsumerConfig) *kafkago.Reader {
 	return kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:  cfg.Brokers,
 		Topic:    cfg.Topic,
-		GroupID: cfg.GroupID,
+		GroupID:  cfg.GroupID,
 		MinBytes: 1024,
 		MaxBytes: 1048576,
 	})

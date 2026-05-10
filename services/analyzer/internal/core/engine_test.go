@@ -151,11 +151,11 @@ func TestRuleEngine_EvaluateBatch_EmptyBatch(t *testing.T) {
 
 func TestRuleEngine_Evaluate_MLRuleIndexLookup(t *testing.T) {
 	cfg := core.RuleConfig{
-		Name:      "test-ml",
-		AgentID:   "agent-1",
-		Metric:    "test_signal",
-		Type:      core.RuleTypeML,
-		Severity:  core.SeverityCritical,
+		Name:     "test-ml",
+		AgentID:  "agent-1",
+		Metric:   "test_signal",
+		Type:     core.RuleTypeML,
+		Severity: core.SeverityCritical,
 	}
 	mlRule := core.NewMLRule(cfg, nil)
 	engine := core.NewRuleEngine([]core.Rule{mlRule}, discardLogger())

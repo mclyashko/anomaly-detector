@@ -256,9 +256,9 @@ func TestMLRule_Evaluate_InsufficientHistory(t *testing.T) {
 
 func TestParseCondition(t *testing.T) {
 	tests := []struct {
-		cond  string
-		val   float64
-		want  bool
+		cond string
+		val  float64
+		want bool
 	}{
 		{"value > 0.8", 0.9, true},
 		{"value > 0.8", 0.7, false},
@@ -318,7 +318,7 @@ func TestThresholdRule_Evaluate(t *testing.T) {
 	}
 
 	tests := []struct {
-		name  string
+		name   string
 		metric Metric
 		want   bool
 	}{

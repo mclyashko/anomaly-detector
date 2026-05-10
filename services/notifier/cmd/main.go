@@ -52,7 +52,7 @@ func main() {
 	}
 	consumer := broker.NewConsumer(broker.ConsumerConfig{
 		Brokers: brokers,
-		Topic:  cfg.KafkaAnomaliesTopic,
+		Topic:   cfg.KafkaAnomaliesTopic,
 	}, svc, logger)
 
 	// Create HTTP handlers.

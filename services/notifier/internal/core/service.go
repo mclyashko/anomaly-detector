@@ -37,6 +37,7 @@ func NewNotifierService(repo IncidentRepository, channel NotifierChannel, logger
 //   - Look for an existing open incident with the same rule+service+metric (dedup key).
 //   - If found — update it (status=UPDATED) and append an event.
 //   - If not found — create a new incident (status=OPEN) and event in a single transaction.
+//
 // This ensures new anomalies for the same rule+service+metric do not create new incidents.
 func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPayload) (*Incident, error) {
 	// Check for existing open incident with same dedup key.
@@ -83,19 +84,19 @@ func (s *NotifierService) HandleAnomaly(ctx context.Context, payload *AnomalyPay
 
 	// Create new incident atomically with the initial event.
 	incident := &Incident{
-		Rule:         payload.Rule,
-		Service:      payload.Service,
-		Metric:       payload.Metric,
-		Status:       StatusOpen,
-		Severity:     payload.Severity,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
-		Value:        payload.Value,
-		Forecast:     payload.Forecast,
+		Rule:          payload.Rule,
+		Service:       payload.Service,
+		Metric:        payload.Metric,
+		Status:        StatusOpen,
+		Severity:      payload.Severity,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+		Value:         payload.Value,
+		Forecast:      payload.Forecast,
 		ExpectedValue: payload.Forecast,
-		LowerCI:      payload.LowerCI,
-		UpperCI:      payload.UpperCI,
-		Message:      payload.Message,
+		LowerCI:       payload.LowerCI,
+		UpperCI:       payload.UpperCI,
+		Message:       payload.Message,
 	}
 	event := &IncidentEvent{
 		IncidentID: "", // filled after CreateInTx generates the ID

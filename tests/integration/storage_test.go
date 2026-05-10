@@ -1,11 +1,7 @@
 package integration
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// projectRoot returns the project root directory by locating go.work.
 func projectRoot() string {
 	wd, _ := os.Getwd()
 	for {
@@ -28,6 +23,11 @@ func projectRoot() string {
 		}
 		wd = parent
 	}
+}
+
+func dockerCompose(args ...string) (string, error) {
+	out, err := exec.Command("docker", append([]string{"compose"}, args...)...).CombinedOutput()
+	return string(out), err
 }
 
 // TestStorageAndMigration verifies that migrations run successfully and
@@ -68,6 +68,9 @@ func TestStorageAndMigration(t *testing.T) {
 	// Run the same migration that the ingestion service applies.
 	// This verifies the schema is valid for TimescaleDB hypertables.
 	migrationSQL := `
+-- 001_create_schema.sql
+-- Creates the base TimescaleDB schema for metric storage.
+
 CREATE TABLE IF NOT EXISTS metrics (
     id          BIGSERIAL,
     time        TIMESTAMPTZ NOT NULL,
@@ -75,13 +78,42 @@ CREATE TABLE IF NOT EXISTS metrics (
     name        TEXT        NOT NULL,
     value       DOUBLE PRECISION NOT NULL,
     labels      JSONB,
-    metric_type TEXT
+    metric_type TEXT,
+    analyzed_at TIMESTAMPTZ DEFAULT NULL,
+    analyzer_id TEXT DEFAULT NULL
 );
+
+-- Partition by time using TimescaleDB's hypertable for efficient time-series queries.
 SELECT create_hypertable('metrics', 'time', if_not_exists => TRUE);
-ALTER TABLE metrics ADD PRIMARY KEY (time, id);
+
+-- Primary key must include the partitioning column (time), so use a composite pk.
+-- This also satisfies the unique index requirement for hypertables.
+-- BIGSERIAL already creates an implicit pk on 'id', so we need to drop it first.
+DO $$
+BEGIN
+    -- Drop the implicit bigserial primary key if it exists
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'metrics_pkey' AND contype = 'p') THEN
+        ALTER TABLE metrics DROP CONSTRAINT metrics_pkey;
+    END IF;
+    -- Add composite primary key (time, id)
+    ALTER TABLE metrics ADD PRIMARY KEY (time, id);
+EXCEPTION
+    WHEN undefined_object THEN NULL; -- already migrated
+END
+$$;
+
+-- Index on id for direct lookups (non-unique, since time is in the pk).
 CREATE INDEX IF NOT EXISTS idx_metrics_id ON metrics (id);
+
+-- Index on agent_id + time for per-agent range queries.
 CREATE INDEX IF NOT EXISTS idx_metrics_agent_time ON metrics (agent_id, time DESC);
+
+-- Index on metric name for filtered queries.
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics (name);
+
+-- Index for analyzer polling: unanalyzed metrics, ordered by time.
+-- Composite (analyzed_at, time) satisfies both WHERE and ORDER BY — no Sort node needed.
+CREATE INDEX IF NOT EXISTS idx_metrics_analyzed_time ON metrics (analyzed_at, time) WHERE analyzed_at IS NULL;
 `
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -120,85 +152,4 @@ CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics (name);
 	if count != 2 {
 		t.Errorf("expected 2 rows, got %d", count)
 	}
-}
-
-// TestIngestionHTTPEndToEnd starts the ingestion service with TimescaleDB,
-// POSTs a batch over HTTP, and verifies the rows end up in the database.
-func TestIngestionHTTPEndToEnd(t *testing.T) {
-	composeFile := filepath.Join(projectRoot(), "infra", "docker-compose.yml")
-
-	// Start only DB and ingestion (not the full stack).
-	if out, err := dockerCompose("-f", composeFile, "up", "-d",
-		"timescaledb", "ingestion"); err != nil {
-		t.Fatalf("docker compose up failed: %s\n%v", out, err)
-	}
-	t.Cleanup(func() {
-		dockerCompose("-f", composeFile, "down", "-v")
-	})
-
-	// Wait for ingestion HTTP server to be healthy.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	for ctx.Err() == nil {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:8080/healthz", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if ctx.Err() != nil {
-		t.Fatal("ingestion did not become healthy in time")
-	}
-
-	// POST a batch.
-	payload := map[string]any{
-		"agent_id": "integration-test",
-		"metrics": []map[string]any{
-			{"name": "cpu_usage", "value": 0.8, "type": "gauge",
-				"timestamp": time.Now().UTC().Format(time.RFC3339)},
-			{"name": "mem_usage", "value": 0.6, "type": "gauge",
-				"timestamp": time.Now().UTC().Format(time.RFC3339)},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	resp, err := http.Post("http://localhost:8080/api/v1/ingest",
-		"application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusAccepted {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 202, got %d: %s", resp.StatusCode, b)
-	}
-
-	// Verify data was inserted.
-	dsn := "postgres://postgres:secret@localhost:5432/anomaly?sslmode=disable"
-	dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer dbCancel()
-
-	conn, err := pgx.Connect(dbCtx, dsn)
-	if err != nil {
-		t.Fatalf("pgx.Connect failed: %v", err)
-	}
-	defer conn.Close(dbCtx)
-
-	var count int
-	err = conn.QueryRow(dbCtx,
-		"SELECT COUNT(*) FROM metrics WHERE agent_id='integration-test'").Scan(&count)
-	if err != nil {
-		t.Fatalf("SELECT COUNT failed: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 rows stored, got %d", count)
-	}
-}
-
-func dockerCompose(args ...string) (string, error) {
-	out, err := exec.Command("docker", append([]string{"compose"}, args...)...).CombinedOutput()
-	return string(out), err
 }

@@ -43,10 +43,10 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 	}
 
 	checks := map[string]float64{
-		"http_requests_total":  100,
-		"http_errors_total":    5,
-		"http_latency_avg_ms":  12.5,
-		"worker_ops_total":     999,
+		"http_requests_total": 100,
+		"http_errors_total":   5,
+		"http_latency_avg_ms": 12.5,
+		"worker_ops_total":    999,
 		"test_signal":         0.5,
 	}
 	for name, want := range checks {
@@ -66,10 +66,10 @@ func TestHTTPScrapeCollector_ParsesResponse(t *testing.T) {
 
 func TestHTTPScrapeCollector_MetricTypes(t *testing.T) {
 	srv := fakeMetricsServer(map[string]any{
-		"http_requests_total":  1,
-		"http_errors_total":    0,
+		"http_requests_total": 1,
+		"http_errors_total":   0,
 		"http_latency_avg_ms": 1.0,
-		"worker_ops_total":     1,
+		"worker_ops_total":    1,
 		"test_signal":         0.5,
 	})
 	defer srv.Close()

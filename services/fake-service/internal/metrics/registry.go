@@ -63,7 +63,7 @@ type Snapshot struct {
 	HTTPErrorsTotal   int64   `json:"http_errors_total"`
 	HTTPLatencyAvgMs  float64 `json:"http_latency_avg_ms"`
 	WorkerOpsTotal    int64   `json:"worker_ops_total"`
-	TestSignal        float64 `json:"test_signal"` // current active signal value
+	TestSignal        float64 `json:"test_signal"`   // current active signal value
 	ActiveSignal      string  `json:"active_signal"` // "A" or "B"
 }
 
@@ -87,7 +87,7 @@ func (r *Registry) Snapshot() Snapshot {
 		HTTPErrorsTotal:   r.errorsTotal.Load(),
 		HTTPLatencyAvgMs:  avgMs,
 		WorkerOpsTotal:    r.workerOpsTotal.Load(),
-		TestSignal:       signalVal,
+		TestSignal:        signalVal,
 		ActiveSignal:      map[bool]string{true: "B", false: "A"}[active == 1],
 	}
 }
@@ -169,8 +169,8 @@ func (r *Registry) SignalStateHandler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"active_signal": r.GetActiveSignal().String(),
-			"signal_a":       math.Float64frombits(uint64(r.signalA.Load())),
-			"signal_b":       math.Float64frombits(uint64(r.signalB.Load())),
+			"signal_a":      math.Float64frombits(uint64(r.signalA.Load())),
+			"signal_b":      math.Float64frombits(uint64(r.signalB.Load())),
 		}) //nolint:errcheck
 	}
 }

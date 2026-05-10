@@ -28,20 +28,20 @@ const (
 type Incident struct {
 	ID            string         `json:"id"`
 	Rule          string         `json:"rule"`
-	Service      string         `json:"service"`
-	Metric       string         `json:"metric"`
-	Status       IncidentStatus `json:"status"`
-	Severity     string         `json:"severity"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	ResolvedAt   *time.Time     `json:"resolved_at,omitempty"`
-	Resolution   string         `json:"resolution,omitempty"`
-	Value        float64        `json:"value,omitempty"`
-	Forecast     float64        `json:"forecast,omitempty"`
-	ExpectedValue float64       `json:"expected_value,omitempty"`
-	LowerCI      float64        `json:"lower_ci,omitempty"`
-	UpperCI      float64        `json:"upper_ci,omitempty"`
-	Message      string         `json:"message,omitempty"`
+	Service       string         `json:"service"`
+	Metric        string         `json:"metric"`
+	Status        IncidentStatus `json:"status"`
+	Severity      string         `json:"severity"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	ResolvedAt    *time.Time     `json:"resolved_at,omitempty"`
+	Resolution    string         `json:"resolution,omitempty"`
+	Value         float64        `json:"value,omitempty"`
+	Forecast      float64        `json:"forecast,omitempty"`
+	ExpectedValue float64        `json:"expected_value,omitempty"`
+	LowerCI       float64        `json:"lower_ci,omitempty"`
+	UpperCI       float64        `json:"upper_ci,omitempty"`
+	Message       string         `json:"message,omitempty"`
 }
 
 // IncidentEvent is a single anomaly event tied to an incident.
@@ -50,7 +50,7 @@ type IncidentEvent struct {
 	ID         string          `json:"id"`
 	IncidentID string          `json:"incident_id"`
 	Payload    json.RawMessage `json:"payload"`
-	Timestamp  time.Time       `json:"timestamp"` // time from the metric itself (when it was recorded)
+	Timestamp  time.Time       `json:"timestamp"`  // time from the metric itself (when it was recorded)
 	CreatedAt  time.Time       `json:"created_at"` // when the event was actually created in the DB
 }
 

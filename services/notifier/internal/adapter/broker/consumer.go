@@ -37,22 +37,22 @@ type Consumer struct {
 	logger *slog.Logger
 	svc    *core.NotifierService
 
-	reader kafkaFetcher // Kafka message fetcher; injectable for testing
-	jobs   chan kafkago.Message
-	wg     sync.WaitGroup
-	stopMu sync.Mutex
+	reader  kafkaFetcher // Kafka message fetcher; injectable for testing
+	jobs    chan kafkago.Message
+	wg      sync.WaitGroup
+	stopMu  sync.Mutex
 	stopped bool
 
-	stopCtxFn   context.Context
-	stopCancel  context.CancelFunc
-	stopOnce    sync.Once
+	stopCtxFn  context.Context
+	stopCancel context.CancelFunc
+	stopOnce   sync.Once
 }
 
 type ConsumerConfig struct {
 	Brokers  []string
 	Topic    string // Kafka topic for anomaly events
 	Workers  int    // parallel message handlers; default 8
-	Capacity int     // bounded channel capacity (backpressure); default 256
+	Capacity int    // bounded channel capacity (backpressure); default 256
 }
 
 func (c ConsumerConfig) defaults() ConsumerConfig {
@@ -106,8 +106,8 @@ func (c *Consumer) Consume(ctx context.Context) error {
 
 	c.logger.Info("kafka consumer starting",
 		"brokers", c.cfg.Brokers,
-		"topic",   c.cfg.Topic,
-		"group",   consumerGroup,
+		"topic", c.cfg.Topic,
+		"group", consumerGroup,
 		"workers", c.cfg.Workers,
 	)
 

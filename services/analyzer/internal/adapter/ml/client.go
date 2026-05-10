@@ -18,8 +18,8 @@ type Client struct {
 
 // Config holds ML service connection settings.
 type Config struct {
-	URL      string        // e.g. "http://ml-service:8085"
-	Timeout  time.Duration // request timeout
+	URL     string        // e.g. "http://ml-service:8085"
+	Timeout time.Duration // request timeout
 }
 
 // NewClient creates a new ML service client.

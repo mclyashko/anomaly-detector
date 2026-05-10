@@ -102,7 +102,7 @@ func stringifyPayload(data []byte) string {
 
 // templateFuncs provides functions available in templates.
 var templateFuncs = template.FuncMap{
-	"parsePayload":    parsePayload,
+	"parsePayload":     parsePayload,
 	"stringifyPayload": stringifyPayload,
 }
 

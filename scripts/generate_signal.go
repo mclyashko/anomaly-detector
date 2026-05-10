@@ -4,7 +4,8 @@
 // Seeds TimescaleDB with deterministic cyclic time-series signals.
 //
 // Usage:
-//   go run scripts/generate_signal.go [sin|parabola] [base_time] [days]
+//
+//	go run scripts/generate_signal.go [sin|parabola] [base_time] [days]
 //
 // base_time is RFC3339 (default: 2026-04-01T00:00:00Z)
 // days is number of 24-hour cycles to generate (default: 1)
@@ -24,9 +25,9 @@ const (
 	DBDSN       = "postgres://postgres:secret@localhost:5432/anomaly?sslmode=disable"
 	AgentID     = "agent-test"
 	MetricName  = "test.signal"
-	StepHours   = 0.1          // 6-minute intervals
-	PeriodHours = 24.0         // 24-hour cycle
-	StepsPerDay = 240          // 240 * 0.1h = 24h
+	StepHours   = 0.1  // 6-minute intervals
+	PeriodHours = 24.0 // 24-hour cycle
+	StepsPerDay = 240  // 240 * 0.1h = 24h
 )
 
 func main() {

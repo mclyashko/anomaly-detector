@@ -103,8 +103,8 @@ func (m *mockRepository) GetComments(ctx context.Context, incidentID string) ([]
 type txMock struct{}
 
 func (txMock) Begin(ctx context.Context) (txMock, error) { return txMock{}, nil }
-func (txMock) Commit(ctx context.Context) error         { return nil }
-func (txMock) Rollback(ctx context.Context) error       { return nil }
+func (txMock) Commit(ctx context.Context) error          { return nil }
+func (txMock) Rollback(ctx context.Context) error        { return nil }
 func (txMock) Exec(ctx context.Context, sql string, arguments ...any) (interface{ RowsAffected() int64 }, error) {
 	return nil, nil
 }

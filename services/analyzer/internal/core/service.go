@@ -38,11 +38,11 @@ func NewAnalyzerService(
 ) *AnalyzerService {
 	return &AnalyzerService{
 		reader:     reader,
-		engine:    engine,
-		producer:  producer,
+		engine:     engine,
+		producer:   producer,
 		analyzerID: analyzerID,
-		batchSize: batchSize,
-		logger:    logger,
+		batchSize:  batchSize,
+		logger:     logger,
 	}
 }
 

@@ -9,13 +9,13 @@ import (
 )
 
 type Config struct {
-	HTTPPort       string
-	RulesFile      string
-	LogLevel       string
+	HTTPPort  string
+	RulesFile string
+	LogLevel  string
 	// Storage
 	DBDSN string
 	// Kafka
-	KafkaBrokers       string
+	KafkaBrokers        string
 	KafkaAnomaliesTopic string
 	// Analyzer settings
 	AnalyzerID   string
