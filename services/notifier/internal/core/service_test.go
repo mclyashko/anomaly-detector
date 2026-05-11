@@ -75,6 +75,48 @@ func (m *mockRepository) List(ctx context.Context) ([]Incident, error) {
 	return result, nil
 }
 
+func (m *mockRepository) ListFiltered(ctx context.Context, filters IncidentFilters, page, pageSize int) ([]Incident, int, error) {
+	var result []Incident
+	for _, inc := range m.incidents {
+		if len(filters.Status) > 0 {
+			found := false
+			for _, s := range filters.Status {
+				if inc.Status == s {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		if len(filters.Severity) > 0 {
+			found := false
+			for _, sev := range filters.Severity {
+				if inc.Severity == sev {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		result = append(result, *inc)
+	}
+	// Apply pagination.
+	total := len(result)
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []Incident{}, total, nil
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return result[start:end], total, nil
+}
+
 func (m *mockRepository) AddEvent(ctx context.Context, incidentID string, event *IncidentEvent) error {
 	event.ID = "event-1"
 	event.CreatedAt = time.Now().UTC()

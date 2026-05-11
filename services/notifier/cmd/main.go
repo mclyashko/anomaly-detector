@@ -56,8 +56,8 @@ func main() {
 	}, svc, logger)
 
 	// Create HTTP handlers.
-	uiHandler := ui.New(svc, logger)
-	handler := http.New(svc, uiHandler, logger)
+	uiHandler := ui.New(svc, logger, cfg.AnalyzerURL)
+	handler := http.New(svc, uiHandler, logger, cfg.AnalyzerURL)
 
 	// Start HTTP server.
 	srv := &stdlibhttp.Server{

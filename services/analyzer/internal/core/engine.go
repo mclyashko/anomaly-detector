@@ -127,6 +127,36 @@ func (e *RuleEngine) GetMLRules() []MLRuleInfo {
 	return result
 }
 
+// RuleSummary is a human-readable summary of a rule for the UI.
+type RuleSummary struct {
+	Name     string   `json:"name"`
+	Type     RuleType `json:"type"`
+	AgentID  string   `json:"agent_id"`
+	Metric   string   `json:"metric"`
+	Enabled  bool     `json:"enabled"`
+	Severity Severity `json:"severity"`
+}
+
+// GetAllRules returns summaries of all registered rules.
+func (e *RuleEngine) GetAllRules() []RuleSummary {
+	result := make([]RuleSummary, 0, len(e.rules))
+	for _, rule := range e.rules {
+		cfg := extractRuleConfig(rule)
+		if cfg == nil {
+			continue
+		}
+		result = append(result, RuleSummary{
+			Name:     cfg.Name,
+			Type:     cfg.Type,
+			AgentID:  cfg.AgentID,
+			Metric:   cfg.Metric,
+			Enabled:  cfg.Enabled,
+			Severity: cfg.Severity,
+		})
+	}
+	return result
+}
+
 // EvaluateBatch evaluates all rules against all metrics in the batch.
 // For large batches (>= batchParallelThreshold metrics) it parallelizes
 // evaluation across multiple goroutines for throughput at scale.

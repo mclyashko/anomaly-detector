@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -10,17 +11,64 @@ import (
 	"github.com/mclyashko/anomaly-detector/services/notifier/internal/core"
 )
 
-// handleListIncidents returns all incidents.
+// handleListIncidents returns all incidents with optional filtering and pagination.
 func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
-	incidents, err := h.svc.ListIncidents(r.Context())
+	ctx := r.Context()
+
+	// Parse query params.
+	page := 1
+	pageSize := 20
+	if p := r.URL.Query().Get("page"); p != "" {
+		if parsed, err := parsePositiveInt(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if ps := r.URL.Query().Get("page_size"); ps != "" {
+		if parsed, err := parsePositiveInt(ps); err == nil && parsed > 0 {
+			pageSize = parsed
+		}
+	}
+
+	statusVals := r.URL.Query()["status"]
+	severityVals := r.URL.Query()["severity"]
+
+	// If no filters, use simple List.
+	if len(statusVals) == 0 && len(severityVals) == 0 {
+		incidents, err := h.svc.ListIncidents(ctx)
+		if err != nil {
+			h.logger.Error("failed to list incidents", "err", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"incidents": incidents, "total": len(incidents), "page": 1, "page_size": len(incidents)})
+		return
+	}
+
+	// Build filters.
+	var filters core.IncidentFilters
+	for _, s := range statusVals {
+		if st := core.IncidentStatus(s); st == core.StatusOpen || st == core.StatusUpdated || st == core.StatusEscalated || st == core.StatusResolved {
+			filters.Status = append(filters.Status, st)
+		}
+	}
+	filters.Severity = severityVals
+
+	incidents, total, err := h.svc.ListIncidentsFiltered(ctx, filters, page, pageSize)
 	if err != nil {
-		h.logger.Error("failed to list incidents", "err", err)
+		h.logger.Error("failed to list filtered incidents", "err", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(incidents)
+	json.NewEncoder(w).Encode(map[string]any{"incidents": incidents, "total": total, "page": page, "page_size": pageSize})
+}
+
+func parsePositiveInt(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 // handleGetIncident returns a single incident with events and comments.
@@ -223,4 +271,25 @@ func (h *Handler) handleNotification(w http.ResponseWriter, r *http.Request) {
 // handleHealth returns 200 OK for load balancer health checks.
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleRules fetches all rules from the analyzer service and returns them.
+func (h *Handler) handleRules(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(h.analyzerURL + "/api/v1/rules")
+	if err != nil {
+		h.logger.Warn("failed to fetch rules from analyzer", "err", err)
+		http.Error(w, `{"error":"analyzer unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read response"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
 }

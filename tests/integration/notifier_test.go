@@ -315,10 +315,22 @@ func TestNotifierEndToEnd(t *testing.T) {
 		t.Fatalf("expected 200 for list, got %d: %s", listResp.StatusCode, b)
 	}
 
-	var incidents []map[string]any
-	json.NewDecoder(listResp.Body).Decode(&incidents)
-	if len(incidents) < 1 {
+	type incidentsResponse struct {
+		Incidents []map[string]any `json:"incidents"`
+		Page      int               `json:"page"`
+		PageSize  int               `json:"page_size"`
+		Total     int               `json:"total"`
+	}
+
+	var list incidentsResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatalf("failed to decode incidents response: %v", err)
+	}
+	if len(list.Incidents) < 1 {
 		t.Error("expected at least 1 incident in list")
+	}
+	if list.Total < 1 {
+		t.Error("expected total >= 1")
 	}
 
 	t.Log("Full incident lifecycle test passed!")

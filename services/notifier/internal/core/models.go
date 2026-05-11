@@ -196,6 +196,12 @@ type IncidentWithDetails struct {
 	Comments []IncidentComment `json:"comments"`
 }
 
+// IncidentFilters holds filter criteria for listing incidents.
+type IncidentFilters struct {
+	Status   []IncidentStatus
+	Severity []string
+}
+
 // DedupKey returns the deduplication key for the incident.
 // Incidents are deduplicated by rule+service+metric — this prevents
 // creating a new incident if an open one already exists for the same rule.

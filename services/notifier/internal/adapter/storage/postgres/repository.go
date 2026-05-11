@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -132,6 +133,74 @@ func (r *Repository) List(ctx context.Context) ([]core.Incident, error) {
 		incidents = append(incidents, *inc)
 	}
 	return incidents, nil
+}
+
+// ListFiltered returns incidents matching filters with pagination, plus total count.
+func (r *Repository) ListFiltered(ctx context.Context, filters core.IncidentFilters, page, pageSize int) ([]core.Incident, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	// Build WHERE clause dynamically.
+	where := "WHERE 1=1"
+	args := []any{}
+	argIdx := 1
+
+	if len(filters.Status) > 0 {
+		placeholders := make([]string, len(filters.Status))
+		for i, s := range filters.Status {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, s)
+			argIdx++
+		}
+		where += fmt.Sprintf(" AND status IN (%s)", strings.Join(placeholders, ","))
+	}
+	if len(filters.Severity) > 0 {
+		placeholders := make([]string, len(filters.Severity))
+		for i, sev := range filters.Severity {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, sev)
+			argIdx++
+		}
+		where += fmt.Sprintf(" AND severity IN (%s)", strings.Join(placeholders, ","))
+	}
+
+	// Count query.
+	countQuery := "SELECT COUNT(*) FROM incidents " + where
+	var total int
+	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count incidents: %w", err)
+	}
+
+	// Main query with pagination.
+	query := fmt.Sprintf(`
+		SELECT id, rule, service, metric, status, severity, created_at, updated_at, resolved_at, resolution
+		FROM incidents
+		%s
+		ORDER BY updated_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIdx, argIdx+1)
+	args = append(args, pageSize, offset)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list filtered incidents: %w", err)
+	}
+	defer rows.Close()
+
+	var incidents []core.Incident
+	for rows.Next() {
+		inc, err := r.scanIncidentRows(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		incidents = append(incidents, *inc)
+	}
+	return incidents, total, nil
 }
 
 // CreateInTx inserts a new incident using the provided transaction.

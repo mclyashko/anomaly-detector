@@ -258,6 +258,11 @@ func (s *NotifierService) ListIncidents(ctx context.Context) ([]Incident, error)
 	return s.repo.List(ctx)
 }
 
+// ListIncidentsFiltered returns incidents matching filters with pagination.
+func (s *NotifierService) ListIncidentsFiltered(ctx context.Context, filters IncidentFilters, page, pageSize int) ([]Incident, int, error) {
+	return s.repo.ListFiltered(ctx, filters, page, pageSize)
+}
+
 func mustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b

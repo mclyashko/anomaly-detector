@@ -162,6 +162,7 @@ make test-integration
 | `DB_DSN` | `postgres://postgres:secret@timescaledb:5432/notifier?sslmode=disable` | PostgreSQL DSN |
 | `KAFKA_BROKERS` | `kafka:9092` | Kafka брокеры |
 | `KAFKA_ANOMALIES_TOPIC` | `anomalies` | Топик для аномалий |
+| `ANALYZER_URL` | `http://analyzer:8081` | URL analyzer service (Rules page) |
 
 ---
 
@@ -210,12 +211,14 @@ POST /api/v1/evaluate
 |----------|-------|---------|
 | `/healthz` | GET | Health check |
 | `/api/v1/notifications` | POST | Принять аномалию |
-| `/api/v1/incidents` | GET | Список инцидентов |
+| `/api/v1/incidents` | GET | Список инцидентов (фильтрация: `?status=OPEN&severity=critical&page=1&page_size=20`) |
 | `/api/v1/incidents/{id}` | GET | Детали инцидента |
 | `/api/v1/incidents/{id}/escalate` | POST | Эскалация |
 | `/api/v1/incidents/{id}/resolve` | POST | Закрытие |
 | `/api/v1/incidents/{id}/comment` | POST | Комментарий |
-| `/ui/incidents` | GET | Web UI |
+| `/api/v1/rules` | GET | Правила из analyzer (Rules page) |
+| `/rules` | GET | Web UI — Rules page |
+| `/ui/incidents` | GET | Web UI — Incidents list |
 
 ---
 

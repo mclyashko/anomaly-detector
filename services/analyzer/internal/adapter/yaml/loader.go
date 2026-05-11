@@ -42,7 +42,19 @@ func (l *Loader) Load() ([]core.RuleConfig, error) {
 		if cfg.Type == "" {
 			return nil, fmt.Errorf("rule %q has no type", cfg.Name)
 		}
-		if cfg.Type == core.RuleTypeML {
+		if cfg.Severity == "" {
+			return nil, fmt.Errorf("rule %q has no severity", cfg.Name)
+		}
+		switch cfg.Type {
+		case core.RuleTypeThreshold:
+			if cfg.Condition == "" {
+				return nil, fmt.Errorf("rule %q (threshold) requires condition", cfg.Name)
+			}
+		case core.RuleTypeLua:
+			if cfg.Script == "" {
+				return nil, fmt.Errorf("rule %q (lua) requires script", cfg.Name)
+			}
+		case core.RuleTypeML:
 			if cfg.TrainIntervalMin == 0 {
 				return nil, fmt.Errorf("rule %q (ml) requires train_interval_min", cfg.Name)
 			}
@@ -57,6 +69,19 @@ func (l *Loader) Load() ([]core.RuleConfig, error) {
 			}
 			if len(cfg.SeasonalOrder) != 4 {
 				return nil, fmt.Errorf("rule %q (ml) requires seasonal_order: [P,D,Q,S] with 4 elements", cfg.Name)
+			}
+		case core.RuleTypeKS:
+			if cfg.ReferenceWindow == 0 {
+				return nil, fmt.Errorf("rule %q (ks) requires reference_window", cfg.Name)
+			}
+			if cfg.MinWindowSize == 0 {
+				return nil, fmt.Errorf("rule %q (ks) requires min_window_size", cfg.Name)
+			}
+			if cfg.SignificanceLevel == 0 {
+				cfg.SignificanceLevel = 0.05 // default; restore after check
+			}
+			if cfg.SignificanceLevel <= 0 || cfg.SignificanceLevel >= 1 {
+				return nil, fmt.Errorf("rule %q (ks) requires significance_level in (0, 1)", cfg.Name)
 			}
 		}
 	}

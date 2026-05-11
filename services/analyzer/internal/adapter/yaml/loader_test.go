@@ -157,6 +157,96 @@ rules:
 	}
 }
 
+func TestLoader_MissingSeverity(t *testing.T) {
+	content := `
+rules:
+  - name: r1
+    enabled: true
+    metric: cpu
+    type: threshold
+    condition: "value > 0.8"
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	_, err := yaml.NewLoader(tmp).Load()
+	if err == nil {
+		t.Error("expected error for missing severity")
+	}
+}
+
+func TestLoader_MissingThresholdCondition(t *testing.T) {
+	content := `
+rules:
+  - name: r1
+    enabled: true
+    metric: cpu
+    type: threshold
+    severity: warning
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	_, err := yaml.NewLoader(tmp).Load()
+	if err == nil {
+		t.Error("expected error for missing condition in threshold rule")
+	}
+}
+
+func TestLoader_MissingLuaScript(t *testing.T) {
+	content := `
+rules:
+  - name: r1
+    enabled: true
+    metric: cpu
+    type: lua
+    severity: warning
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	_, err := yaml.NewLoader(tmp).Load()
+	if err == nil {
+		t.Error("expected error for missing script in lua rule")
+	}
+}
+
+func TestLoader_MissingKSFields(t *testing.T) {
+	content := `
+rules:
+  - name: r1
+    enabled: true
+    metric: cpu
+    type: ks
+    severity: critical
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	_, err := yaml.NewLoader(tmp).Load()
+	if err == nil {
+		t.Error("expected error for missing ks fields")
+	}
+}
+
+func TestLoader_MissingMLFields(t *testing.T) {
+	content := `
+rules:
+  - name: r1
+    enabled: true
+    metric: cpu
+    type: ml
+    severity: critical
+`
+	tmp := tempFile(t, content)
+	defer os.Remove(tmp)
+
+	_, err := yaml.NewLoader(tmp).Load()
+	if err == nil {
+		t.Error("expected error for missing ml fields")
+	}
+}
+
 func TestCompileRules(t *testing.T) {
 	content := `
 rules:
