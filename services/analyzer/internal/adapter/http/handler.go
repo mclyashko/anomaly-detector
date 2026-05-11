@@ -20,21 +20,28 @@ type MLRulesProvider interface {
 	GetMLRules() []core.MLRuleInfo
 }
 
+// RulesProvider exposes all rules for the UI.
+type RulesProvider interface {
+	GetAllRules() []core.RuleSummary
+}
+
 // Handler wires HTTP routes to the analyzer.
 type Handler struct {
 	svc     BatchHandler
 	mlRules MLRulesProvider
+	rules   RulesProvider
 	logger  *slog.Logger
 }
 
-func New(svc BatchHandler, mlRules MLRulesProvider, logger *slog.Logger) *Handler {
-	return &Handler{svc: svc, mlRules: mlRules, logger: logger}
+func New(svc BatchHandler, mlRules MLRulesProvider, rules RulesProvider, logger *slog.Logger) *Handler {
+	return &Handler{svc: svc, mlRules: mlRules, rules: rules, logger: logger}
 }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/analyze", h.handleAnalyze)
 	mux.HandleFunc("GET /api/v1/ml-rules", h.handleMLRules)
+	mux.HandleFunc("GET /api/v1/rules", h.handleRules)
 	mux.HandleFunc("GET /healthz", h.handleHealth)
 	return mux
 }
@@ -115,6 +122,12 @@ func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (h *Handler) handleMLRules(w http.ResponseWriter, _ *http.Request) {
 	rules := h.mlRules.GetMLRules()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rules)
+}
+
+func (h *Handler) handleRules(w http.ResponseWriter, _ *http.Request) {
+	rules := h.rules.GetAllRules()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rules)
 }

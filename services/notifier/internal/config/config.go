@@ -13,6 +13,7 @@ type Config struct {
 	LogLevel            string
 	KafkaBrokers        string
 	KafkaAnomaliesTopic string
+	AnalyzerURL         string // URL of the analyzer service (e.g. "http://analyzer:8081")
 }
 
 // Load reads environment variables and returns the notifier service configuration.
@@ -26,6 +27,7 @@ func Load() (Config, error) {
 		LogLevel:            envconfig.Get("LOG_LEVEL", "info"),
 		KafkaBrokers:        envconfig.Get("KAFKA_BROKERS", "kafka:9092"),
 		KafkaAnomaliesTopic: envconfig.Get("KAFKA_ANOMALIES_TOPIC", "anomalies"),
+		AnalyzerURL:         envconfig.Get("ANALYZER_URL", "http://analyzer:8081"),
 	}
 
 	if cfg.DBDSN == "" {

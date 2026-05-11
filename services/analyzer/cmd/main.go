@@ -86,7 +86,7 @@ func main() {
 	)
 
 	// HTTP handler for ML rules and debug analyze endpoint.
-	httpHandler := http.New(svc, ruleEngine, logger)
+	httpHandler := http.New(svc, ruleEngine, ruleEngine, logger)
 	httpServer := &stdlibhttp.Server{
 		Addr:         ":" + cfg.HTTPPort,
 		Handler:      httpHandler.Routes(),

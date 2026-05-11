@@ -19,6 +19,9 @@ type IncidentRepository interface {
 	// List returns all incidents ordered by updated_at descending.
 	List(ctx context.Context) ([]Incident, error)
 
+	// ListFiltered returns incidents matching filters with pagination.
+	ListFiltered(ctx context.Context, filters IncidentFilters, page, pageSize int) ([]Incident, int, error)
+
 	// AddEvent appends an event to an incident.
 	AddEvent(ctx context.Context, incidentID string, event *IncidentEvent) error
 

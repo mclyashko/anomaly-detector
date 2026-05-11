@@ -33,13 +33,22 @@ func (p *mockMLRulesProvider) GetMLRules() []core.MLRuleInfo {
 	return p.rules
 }
 
+type mockRulesProvider struct {
+	rules []core.RuleSummary
+}
+
+func (p *mockRulesProvider) GetAllRules() []core.RuleSummary {
+	return p.rules
+}
+
 // --- helpers ---
 
 func newHandler() (*httphandler.Handler, *mockAnalyzer) {
 	analyzer := &mockAnalyzer{}
 	mlRules := &mockMLRulesProvider{}
+	rulesProvider := &mockRulesProvider{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return httphandler.New(analyzer, mlRules, logger), analyzer
+	return httphandler.New(analyzer, mlRules, rulesProvider, logger), analyzer
 }
 
 func postJSON(handler http.Handler, path string, body []byte) *httptest.ResponseRecorder {
@@ -125,7 +134,7 @@ func TestMLRules_ReturnsRules(t *testing.T) {
 			{AgentID: "agent-1", Metric: "cpu", TrainIntervalMin: 30, TrainDataWindow: 500, SeasonalityPeriod: 60, Order: []int{1, 0, 1}, SeasonalOrder: []int{1, 1, 1, 60}},
 		},
 	}
-	handler := httphandler.New(&mockAnalyzer{}, mlRules, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler := httphandler.New(&mockAnalyzer{}, mlRules, &mockRulesProvider{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ml-rules", nil)
 	w := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(w, req)
