@@ -381,3 +381,9 @@ make test-integration
 | `TestModelNaming` | Формат `model_id = {agent}__{metric}` |
 | `TestSinParabolaDiscrimination` | Sin → 0 аномалий, parabola → много |
 | `TestEvaluateEndpointStructure` | Структура ответа /api/v1/evaluate |
+
+### Нагрузочное тестирование (k6)
+
+```bash
+make load-test-up
+```

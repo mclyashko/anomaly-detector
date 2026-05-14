@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-integration build-up build-down build-clean lint vet tidy fmt clean run-ml python-setup
+.PHONY: help test test-unit test-integration build-up build-down build-clean lint vet tidy fmt clean run-ml python-setup load-test load-test-up
 
 COMPOSE := docker compose -f infra/docker-compose.yml
 
@@ -55,3 +55,19 @@ python-setup: ## Create venv and install dependencies
 
 run-ml: python-setup ## Run training service locally (port 8085)
 	PYTHONPATH=services/training .venv/bin/python -m uvicorn services.training.app:app --host 0.0.0.0 --port 8085
+
+load-test: ## Run all k6 load tests sequentially (requires running services)
+	@echo ""
+	@echo "========== 1. NOTIFIER POST (create incidents) =========="
+	k6 run load-test/notifier.js
+	@sleep 3
+	@echo ""
+	@echo "Cleaning up incidents..."
+	docker exec -i infra-timescaledb-1 psql -U postgres -d notifier -c "DELETE FROM incidents;" > /dev/null 2>&1 || true
+	@sleep 2
+	@echo ""
+	@echo "========== 2. NOTIFIER GET (list incidents) =========="
+	k6 run load-test/notifier_get.js
+
+load-test-up: ## Start services and run all load tests
+	make build-up && sleep 10 && make load-test

@@ -32,20 +32,6 @@ func (h *Handler) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	statusVals := r.URL.Query()["status"]
 	severityVals := r.URL.Query()["severity"]
 
-	// If no filters, use simple List.
-	if len(statusVals) == 0 && len(severityVals) == 0 {
-		incidents, err := h.svc.ListIncidents(ctx)
-		if err != nil {
-			h.logger.Error("failed to list incidents", "err", err)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"incidents": incidents, "total": len(incidents), "page": 1, "page_size": len(incidents)})
-		return
-	}
-
-	// Build filters.
 	var filters core.IncidentFilters
 	for _, s := range statusVals {
 		if st := core.IncidentStatus(s); st == core.StatusOpen || st == core.StatusUpdated || st == core.StatusEscalated || st == core.StatusResolved {
