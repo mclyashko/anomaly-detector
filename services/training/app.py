@@ -1,35 +1,23 @@
 """ML Training Service — trains SARIMA models and evaluates anomalies.
 
-The service operates in two modes:
-1. HTTP API for training and inference (called by analyzer)
-2. Auto-retrain mode — periodically checks models for staleness and retrains
-   if data has changed
-
-Workflow:
-- On training request, fit statsmodels SARIMAX on the provided signal data
-- SARIMAX(1,0,1)(1,1,1,S) — seasonal ARIMA with one AR and one MA coefficient
-- On inference: compute a forecast, compare against the confidence interval
-- If value is outside CI — anomaly
-
-Models are stored as JSON files in MODELS_DIR: {model_id}/metadata.json
+Models are stored in-memory only (RAM). All inference uses proper SARIMA
+via fit.extend() + get_forecast() through ModelStore.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 
-from infer import evaluate_anomaly
 from core.sarima_model import train_sarima
+from core.model_store import ModelStore
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,17 +29,13 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────
 
-MODELS_DIR = Path(os.getenv("MODELS_DIR", "./models"))
-MODELS_DIR.mkdir(exist_ok=True)
-
 ANALYZER_URL = os.getenv("ANALYZER_URL", "http://analyzer:8081")
 MODEL_REFRESH_CHECK_SEC = int(os.getenv("MODEL_REFRESH_CHECK_SEC", "60"))
 DB_DSN = os.getenv("DB_DSN", "")
 PORT = int(os.getenv("PORT", "8085"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 
-# In-memory cache for quick access
-_model_cache: dict[str, dict] = {}
+# Model store — holds fitted SARIMAXResults in RAM only
+_model_store = ModelStore()
 
 # TimescaleDB repository (lazy init if DB_DSN is set)
 _ts_repo = None
@@ -78,6 +62,7 @@ class MLRuleInfo(BaseModel):
     seasonality_period: int
     order: list[int]
     seasonal_order: list[int]
+
 
 class TrainRequest(BaseModel):
     agent_id: str
@@ -133,23 +118,6 @@ def _model_id(agent_id: str, metric_name: str) -> str:
     return f"{agent_id}__{safe}"
 
 
-def _load_model_from_disk(model_id: str) -> Optional[dict]:
-    """Load model metadata from disk."""
-    model_path = MODELS_DIR / model_id / "metadata.json"
-    if not model_path.exists():
-        return None
-    with open(model_path) as f:
-        return json.load(f)
-
-
-def _save_model_to_disk(model_id: str, metadata: dict) -> None:
-    """Save model metadata to disk."""
-    model_path = MODELS_DIR / model_id
-    model_path.mkdir(exist_ok=True, parents=True)
-    with open(model_path / "metadata.json", "w") as f:
-        json.dump(metadata, f, indent=2)
-
-
 # ─────────────────────────────────────────────────────────────────
 # Lifespan & App
 # ─────────────────────────────────────────────────────────────────
@@ -157,8 +125,6 @@ def _save_model_to_disk(model_id: str, metadata: dict) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager: startup + background refresh loop."""
-    load_existing_models()
-
     if DB_DSN:
         asyncio.create_task(_refresh_stale_models_loop())
         logger.info("auto-retrain enabled: ANALYZER_URL=%s MODEL_REFRESH_CHECK_SEC=%d",
@@ -185,10 +151,7 @@ def health():
 
 @app.post("/api/v1/train", response_model=TrainResponse)
 def train(req: TrainRequest):
-    """Train a SARIMA model on the provided data and persist its parameters.
-
-    Uses train_sarima() from core/sarima_model.py — single unified implementation.
-    """
+    """Train a SARIMA model into the in-memory store."""
     import pandas as pd
 
     model_id = _model_id(req.agent_id, req.metric_name)
@@ -203,9 +166,10 @@ def train(req: TrainRequest):
 
     series = pd.Series(req.signal_data, dtype=float)
 
-    result = train_sarima(
+    entry = _model_store.train(
+        agent_id=req.agent_id,
+        metric_name=req.metric_name,
         timeseries=series,
-        seasonality_period=req.seasonality_period,
         order=tuple(req.order),
         seasonal_order=tuple(req.seasonal_order),
         confidence_level=req.confidence_level,
@@ -213,128 +177,94 @@ def train(req: TrainRequest):
         window_size=max(48, req.seasonality_period + 1),
     )
 
-    params = result.params
-
-    metadata = {
-        "model_id": model_id,
-        "agent_id": req.agent_id,
-        "metric_name": req.metric_name,
-        "ar_params": params["ar_params"],
-        "ma_params": params["ma_params"],
-        "seasonal_ar_params": params["seasonal_ar_params"],
-        "seasonal_ma_params": params["seasonal_ma_params"],
-        "residual_std": params["residual_std"],
-        "confidence_level": result.confidence_level,
-        "seasonality_period": req.seasonality_period,
-        "window_size": max(48, req.seasonality_period + 1),
-        "order": result.order,
-        "seasonal_order": result.seasonal_order,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-        "aicc": result.aicc,
-        "d": params["d"],
-        "seasonal_d": params["seasonal_d"],
-        "sigma2": params.get("sigma2"),
-        "training_n": result.training_n,
-        "training_start": result.training_start.isoformat() if result.training_start else None,
-        "training_end": result.training_end.isoformat() if result.training_end else None,
-    }
-
-    _save_model_to_disk(model_id, metadata)
-    _model_cache[model_id] = metadata
-
-    msg = f"trained on {result.training_n} points, aicc={result.aicc:.2f}" if result.aicc else f"trained on {result.training_n} points"
-
     logger.info(
-        "trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f aicc=%s",
+        "trained: model_id=%s rs=%.4f aicc=%s",
         model_id,
-        params["ar_params"],
-        params["seasonal_ar_params"],
-        params["residual_std"],
-        result.aicc,
+        entry.residual_std,
+        entry.aicc,
     )
 
     return TrainResponse(
         model_id=model_id,
         status="trained",
-        ar_params=params["ar_params"],
-        ma_params=params["ma_params"],
-        seasonal_ar_params=params["seasonal_ar_params"],
-        seasonal_ma_params=params["seasonal_ma_params"],
-        residual_std=params["residual_std"],
-        confidence_level=result.confidence_level,
+        ar_params=0.0,
+        ma_params=0.0,
+        seasonal_ar_params=0.0,
+        seasonal_ma_params=0.0,
+        residual_std=entry.residual_std,
+        confidence_level=entry.confidence_level,
         seasonality_period=req.seasonality_period,
         window_size=max(48, req.seasonality_period + 1),
-        order=list(result.order),
-        seasonal_order=list(result.seasonal_order),
-        aicc=result.aicc if result.aicc else 0.0,
-        training_n=result.training_n,
-        message=msg,
+        order=list(entry.order),
+        seasonal_order=list(entry.seasonal_order),
+        aicc=entry.aicc if entry.aicc else 0.0,
+        training_n=entry.training_n,
+        message=f"trained on {entry.training_n} points, aicc={entry.aicc:.2f}" if entry.aicc else f"trained on {entry.training_n} points",
     )
 
 
 @app.post("/api/v1/evaluate", response_model=AnomalyResponse)
 def evaluate(req: EvaluateRequest):
-    """Check whether a value is anomalous relative to a trained model.
+    """Check whether a value is anomalous using the in-memory model."""
+    entry = _model_store.get(req.model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {req.model_id}")
 
-    Logic:
-    1. Look up the model — first in memory (_model_cache), then on disk
-    2. Call evaluate_anomaly() from infer.py — inference logic lives there
-    3. Return JSON with anomaly flag, forecast, and confidence interval bounds
+    try:
+        result = _model_store.evaluate(req.model_id, req.history, req.value)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"insufficient history for evaluation: {e}",
+        )
 
-    History must be at least seasonality_period + 1 points.
-    Otherwise the model returns "insufficient history".
-    """
-    # Try cache first, then disk
-    meta = _model_cache.get(req.model_id)
-    if meta is None:
-        meta = _load_model_from_disk(req.model_id)
-        if meta is None:
-            raise HTTPException(status_code=404, detail=f"Model not found: {req.model_id}")
-        _model_cache[req.model_id] = meta
-
-    result = evaluate_anomaly(
-        history=req.history,
-        value=req.value,
-        ar_params=meta["ar_params"],
-        ma_params=meta["ma_params"],
-        seasonal_ar_params=meta["seasonal_ar_params"],
-        seasonal_ma_params=meta["seasonal_ma_params"],
-        residual_std=meta["residual_std"],
-        seasonality_period=meta["seasonality_period"],
-        confidence_level=meta.get("confidence_level", 0.95),
-    )
-
-    return AnomalyResponse(
-        model_id=req.model_id,
-        **result,
-    )
+    return AnomalyResponse(model_id=req.model_id, **result)
 
 
 @app.get("/api/v1/models")
 def list_models():
-    """List all trained models."""
-    models = []
-    if not MODELS_DIR.exists():
-        return {"models": models}
-
-    for path in MODELS_DIR.iterdir():
-        if path.is_dir():
-            meta_path = path / "metadata.json"
-            if meta_path.exists():
-                with open(meta_path) as f:
-                    models.append(json.load(f))
-    return {"models": models}
+    """List all models currently in memory."""
+    return {
+        "models": [
+            {
+                "model_id": mid,
+                "agent_id": _model_store.get(mid).agent_id,
+                "metric_name": _model_store.get(mid).metric_name,
+                "order": list(_model_store.get(mid).order),
+                "seasonal_order": list(_model_store.get(mid).seasonal_order),
+                "seasonality_period": _model_store.get(mid).seasonality_period,
+                "confidence_level": _model_store.get(mid).confidence_level,
+                "trained_at": _model_store.get(mid).trained_at.isoformat(),
+                "training_n": _model_store.get(mid).training_n,
+                "aicc": _model_store.get(mid).aicc,
+                "residual_std": _model_store.get(mid).residual_std,
+                "window_size": _model_store.get(mid).window_size,
+            }
+            for mid in _model_store.list_model_ids()
+        ]
+    }
 
 
 @app.get("/api/v1/models/{model_id}")
 def get_model(model_id: str):
-    """Get model parameters."""
-    meta = _model_cache.get(model_id)
-    if meta is None:
-        meta = _load_model_from_disk(model_id)
-        if meta is None:
-            raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
-    return meta
+    """Get model parameters from memory."""
+    entry = _model_store.get(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+    return {
+        "model_id": entry.model_id,
+        "agent_id": entry.agent_id,
+        "metric_name": entry.metric_name,
+        "order": list(entry.order),
+        "seasonal_order": list(entry.seasonal_order),
+        "seasonality_period": entry.seasonality_period,
+        "confidence_level": entry.confidence_level,
+        "trained_at": entry.trained_at.isoformat(),
+        "training_n": entry.training_n,
+        "aicc": entry.aicc,
+        "residual_std": entry.residual_std,
+        "window_size": entry.window_size,
+    }
 
 
 @app.get("/api/v1/ml-rules", response_model=list[MLRuleInfo])
@@ -351,79 +281,38 @@ def get_ml_rules():
 
 
 # ─────────────────────────────────────────────────────────────────
-# Startup helpers (called from lifespan)
-# ─────────────────────────────────────────────────────────────────
-
-def load_existing_models():
-    """Pre-load all existing models into cache."""
-    if not MODELS_DIR.exists():
-        logger.info("models directory does not exist, starting fresh")
-        return
-
-    count = 0
-    for path in MODELS_DIR.iterdir():
-        if path.is_dir():
-            meta_path = path / "metadata.json"
-            if meta_path.exists():
-                with open(meta_path) as f:
-                    meta = json.load(f)
-                _model_cache[meta["model_id"]] = meta
-                count += 1
-    logger.info("loaded %d existing models into cache", count)
-
-
-# ─────────────────────────────────────────────────────────────────
 # Auto-retrain background task
 # ─────────────────────────────────────────────────────────────────
 
 async def _refresh_stale_models_loop():
-    """Background task: periodically checks models for staleness and retrains.
-
-    Logic:
-    1. Every MODEL_REFRESH_CHECK_SEC seconds, fetch ML rules from analyzer
-    2. For each rule, check when the model was last trained
-    3. If more than train_interval_min minutes have passed, retrain on fresh data from TimescaleDB
-    4. Need at least 75% of train_data_window points for training
-
-    A model is "stale" when:
-    - It has never been trained (last_trained = None)
-    - More than train_interval_min minutes have passed since last training
-    """
-    import requests
-
+    """Background task: periodically checks models for staleness and retrains."""
     while True:
         await asyncio.sleep(MODEL_REFRESH_CHECK_SEC)
         try:
             rules = await asyncio.to_thread(_fetch_ml_rules_from_analyzer)
-            logger.debug("fetched %d rules from analyzer", len(rules))
             if not rules:
-                logger.info("no ML rules found in analyzer")
                 continue
 
             repo = _get_ts_repo()
             if repo is None:
-                logger.warning("DB_DSN not set, cannot fetch training data")
                 continue
 
             for rule in rules:
                 model_id = _model_id(rule.agent_id, rule.metric)
-                last_trained = _model_last_trained(model_id)
+                entry = _model_store.get(model_id)
+                last_trained = entry.trained_at if entry else None
+
                 if last_trained is None or _is_stale(last_trained, rule.train_interval_min):
-                    logger.info("model stale, retraining: model_id=%s interval_min=%d",
-                                model_id, rule.train_interval_min)
                     data = repo.fetch_recent(rule.agent_id, rule.metric, rule.train_data_window)
-                    logger.debug("fetch_recent returned %d points for %s/%s",
-                                len(data), rule.agent_id, rule.metric)
-                    # Need at least 75% of the training window for a meaningful model.
-                    if len(data) < rule.train_data_window * 3 // 4:
+                    if len(data) < rule.train_data_window:
                         logger.warning("insufficient data for training: got %d, want %d",
                                        len(data), rule.train_data_window)
                         continue
                     _train_model_locally(model_id, rule, data)
                 else:
-                    logger.info("model fresh: model_id=%s last_trained=%s", model_id, last_trained)
+                    logger.info("model fresh: model_id=%s", model_id)
 
-        except (OSError, ConnectionError) as exc:
+        except (OSError, ConnectionError):
             logger.exception("failed to refresh stale models")
 
 
@@ -439,29 +328,14 @@ def _fetch_ml_rules_from_analyzer() -> list[MLRuleInfo]:
         return []
 
 
-def _model_last_trained(model_id: str) -> Optional[str]:
-    """Get last_trained timestamp from model metadata, or None if not found."""
-    meta = _model_cache.get(model_id)
-    if meta is None:
-        meta = _load_model_from_disk(model_id)
-    if meta is None:
-        return None
-    return meta.get("trained_at")
-
-
-def _is_stale(last_trained: str, train_interval_min: int) -> bool:
+def _is_stale(last_trained: datetime, train_interval_min: int) -> bool:
     """Check if a model is stale based on its last training time."""
-    try:
-        trained = datetime.fromisoformat(last_trained.replace("Z", "+00:00"))
-        age = datetime.now(timezone.utc) - trained
-        return age.total_seconds() > train_interval_min * 60
-    except (ValueError, AttributeError):
-        # ISO format mismatch — treat as stale so it gets retrained
-        return True
+    age = datetime.now(timezone.utc) - last_trained
+    return age.total_seconds() > train_interval_min * 60
 
 
 def _train_model_locally(model_id: str, rule: MLRuleInfo, data: list[float]):
-    """Train a SARIMA model and store it locally."""
+    """Train a SARIMA model into the in-memory store."""
     import pandas as pd
 
     logger.info("training model: model_id=%s seasonality=%d n=%d",
@@ -469,9 +343,10 @@ def _train_model_locally(model_id: str, rule: MLRuleInfo, data: list[float]):
 
     series = pd.Series(data, dtype=float)
 
-    result = train_sarima(
+    entry = _model_store.train(
+        agent_id=rule.agent_id,
+        metric_name=rule.metric,
         timeseries=series,
-        seasonality_period=rule.seasonality_period,
         order=tuple(rule.order),
         seasonal_order=tuple(rule.seasonal_order),
         confidence_level=0.95,
@@ -479,38 +354,8 @@ def _train_model_locally(model_id: str, rule: MLRuleInfo, data: list[float]):
         window_size=max(48, rule.seasonality_period + 1),
     )
 
-    params = result.params
-
-    metadata = {
-        "model_id": model_id,
-        "agent_id": rule.agent_id,
-        "metric_name": rule.metric,
-        "ar_params": params["ar_params"],
-        "ma_params": params["ma_params"],
-        "seasonal_ar_params": params["seasonal_ar_params"],
-        "seasonal_ma_params": params["seasonal_ma_params"],
-        "residual_std": params["residual_std"],
-        "confidence_level": result.confidence_level,
-        "seasonality_period": rule.seasonality_period,
-        "window_size": max(48, rule.seasonality_period + 1),
-        "order": result.order,
-        "seasonal_order": result.seasonal_order,
-        "trained_at": datetime.now(timezone.utc).isoformat(),
-        "aicc": result.aicc,
-        "d": params["d"],
-        "seasonal_d": params["seasonal_d"],
-        "sigma2": params.get("sigma2"),
-        "training_n": result.training_n,
-        "training_start": result.training_start.isoformat() if result.training_start else None,
-        "training_end": result.training_end.isoformat() if result.training_end else None,
-    }
-
-    _save_model_to_disk(model_id, metadata)
-    _model_cache[model_id] = metadata
-
-    logger.info("trained: model_id=%s ar=%.4f sar=%.4f rs=%.4f aicc=%s",
-                model_id, params["ar_params"], params["seasonal_ar_params"],
-                params["residual_std"], result.aicc)
+    logger.info("trained: model_id=%s rs=%.4f aicc=%s",
+                model_id, entry.residual_std, entry.aicc)
 
 
 # ─────────────────────────────────────────────────────────────────

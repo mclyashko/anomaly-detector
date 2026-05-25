@@ -198,10 +198,10 @@ func (r *MLRule) Evaluate(m Metric) *Anomaly {
 	// and evaluate runs synchronously with a short HTTP timeout on the ML client side.
 	ctx := context.Background()
 
-	// windowSize = seasonality_period + 1: to compute seasonal correction
-	// we need the value from S periods ago, so we store S+1 most recent values.
-	// With seasonality_period=60 we store 61 values.
-	windowSize := r.cfg.SeasonalityPeriod + 1
+	// windowSize = train_data_window: we need all training points for the model
+	// to be able to do correct Kalman inference. With train_data_window=200
+	// we accumulate 200 values before sending the first evaluation request.
+	windowSize := r.cfg.TrainDataWindow
 
 	// Sliding window: append current value, drop oldest if window exceeds size.
 	// This accumulates history without growing memory indefinitely.

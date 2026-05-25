@@ -190,29 +190,32 @@ func buildChart(events []core.IncidentEvent) template.HTML {
 		return ""
 	}
 
-	// Compute bounding box for all values
-	minVal := points[0].lowerCI
-	maxVal := points[0].upperCI
+	// Compute bounding box for all values (CI bounds AND actual data)
+	// This ensures the chart shows the full signal range, not just CI bounds
+	minV := points[0].lowerCI
+	maxV := points[0].upperCI
 	for _, p := range points {
-		if p.value < minVal {
-			minVal = p.value
+		if p.value < minV {
+			minV = p.value
 		}
-		if p.forecast < minVal {
-			minVal = p.forecast
+		if p.forecast < minV {
+			minV = p.forecast
 		}
-		if p.lowerCI < minVal {
-			minVal = p.lowerCI
+		// Include CI bounds in range calculation
+		if p.lowerCI < minV {
+			minV = p.lowerCI
 		}
-		if p.value > maxVal {
-			maxVal = p.value
+		if p.value > maxV {
+			maxV = p.value
 		}
-		if p.forecast > maxVal {
-			maxVal = p.forecast
+		if p.forecast > maxV {
+			maxV = p.forecast
 		}
-		if p.upperCI > maxVal {
-			maxVal = p.upperCI
+		if p.upperCI > maxV {
+			maxV = p.upperCI
 		}
 	}
+	minVal, maxVal := minV, maxV
 
 	// Add padding
 	rangeVal := maxVal - minVal

@@ -50,7 +50,7 @@ rules:
     type: ml
     severity: critical
     train_interval_min: 30
-    train_data_window: 200
+    train_data_window: 250
     seasonality_period: 60
     order: [1, 0, 1]
     seasonal_order: [1, 1, 1, 60]
